@@ -1,0 +1,149 @@
+  <%
+  my $api = gitprep_api;
+  
+  my $op = param('op') || '';
+  
+  my $errors;
+  my $successMessage;
+
+  if ($op eq 'forgot_password') {
+  
+    # Parameters
+    my $email = lc param('email'); #represents username
+   
+    # Validator
+    my $vc = app->vc;
+    
+    # Validation result
+    my $validation = $vc->validation;
+    
+    # "email" check
+    if (!(defined $email && length $email)) {
+      $validation->add_failed(email => "Mail must be not empty");
+    }
+    elsif ($email !~ /\@/) {
+      $validation->add_failed(email => "Invalid mail address");
+    }
+    else {
+      my $row = app->dbi->model('user')->select(where => {email => $email})->one;
+      if (! $row) {
+        $validation->add_failed(email => "Email $email not exist.");
+      }
+    }
+    
+    if ($validation->is_valid) {
+      # Code to verify email address
+      use strict;
+      use warnings;
+      use Mojo::JWT;
+
+      use Email::Sender::Simple qw(sendmail);
+      use Email::Sender::Transport::SMTP ();
+      use Email::Sender::Transport::SMTP::TLS;
+      use Email::Sender::Transport::SMTPS;
+      use Email::Simple ();
+      use Email::Simple::Creator ();
+      use Try::Tiny;
+
+      my $transport = Email::Sender::Transport::SMTP->new(
+        {
+          host => 'mail.gomailex.com',
+          port => 25,
+          sasl_username => 'gitdada@gomailex.com',
+          sasl_password => 'Gulf@123',
+          debug => 1,
+        }
+      );
+
+      my $jwt = Mojo::JWT->new(claims => $email, secret => 'pwds3cr3t')->encode;
+      my $url = url_for('/_forgot_pwd')->to_abs->query(jwt => $jwt);
+      $url =~ s/localhost:10020/gitdada.com/;
+      my $body = "Hello!\n Please click on below link to reset password\n $url \n";
+      my $verification_email = Email::Simple->create(
+        header => [
+          To      => $email,
+          From    => '"Gitdada Support" <gitdada@gomailex.com>',
+          Subject => "Gitdada Reset Password",
+        ],          
+        body => $body,
+      );
+      $verification_email->header_set( 'X-Content-Container' => 'bottle/glass' );
+
+      # print $email->as_string;
+      try {
+        sendmail($verification_email, {transport => $transport});
+      } catch {
+          die "Error sending email: $_";
+      };
+      if (my $e = $@) {
+        app->log->error(url_for . ": $e");
+        $errors = ['Internal Error'];
+      }
+      else {
+        $successMessage = "Please visit your email address to reset password.";
+      }
+    }
+    else { 
+      #my $errors1 = $validation->messages;
+      my $error_arr = $validation->{'_failed_infos'};
+      my $message;
+      if ($error_arr) {
+        for (keys %$error_arr) {
+          next if (!$_);
+          my $msg_ref = $error_arr->{$_};
+          my $msg = $msg_ref->{'message'};
+          $message .= "$msg\n" if ($msg);
+        }
+      }
+      chomp $message;
+      $errors = $message;
+      #$errors = "Error! Please ensure you are submitting the correct fields";
+    }
+  }
+%>
+
+%= javascript '/js/icon-input.js';
+
+% layout 'frontcommon', title => 'Forgot Password';
+  %= include '/include/fheader';
+  <div class="content content-fixed content-auth">
+    <div class="container">
+      <div class="media align-items-stretch justify-content-center ht-100p pos-relative">
+        <div class="media-body align-items-center d-none d-lg-flex">
+          <div class="mx-wd-600">
+            <img src="image/signup-banner.png" class="img-fluid" alt="" />
+          </div>
+          <!-- div class="pos-absolute b-0 l-0 tx-12 tx-center">
+            Workspace design vector is created by <a href="#" target="_blank">Bangladesh Software Professionm (bdsoftpro.com)</a>
+          </div> -->
+        </div><!-- media-body -->
+        <div class="sign-wrapper mg-lg-l-50 mg-xl-l-60">
+          <div class="wd-100p">
+            <h4 class="tx-color-01 mg-b-5">Reset Password</h4>
+            <p class="tx-color-03 tx-16 mg-b-40">Enter username, You will recieve an email to reset password</p>
+             <p style="color: red">
+                <% if($errors){ %>
+                <%= $errors %>
+                <% } %>
+              </p>
+              <p style="color: green">
+                <% if($successMessage){ %>
+                <%= $successMessage %>
+                <% } %>
+              </p>
+            <form action="<%= url_for->query(op => 'forgot_password') %>" method="post">
+              <div class="form-group">
+                <label>Email</label>
+                <input type="email" id="email" name="email" class="form-control" placeholder="Enter your email address" required>
+              </div>
+              
+              <button type="submit" id="sbmt" class="btn btn-brand-02 btn-block">Reset Password</button>
+            </form>
+            <div class="divider-text">or</div>
+            <div class="tx-13 mg-t-20 tx-center"> <a href="<%= url_for('/') %>">Sign In</a></div>
+          </div>
+        </div><!-- sign-wrapper -->
+      </div><!-- media -->
+    </div><!-- container -->
+  </div><!-- content -->
+  %= include '/include/ffooter';

@@ -1,0 +1,167 @@
+<%
+  # API
+  my $api = gitprep_api;
+  my $session_user_row_id = session('user_row_id');
+  my $session_user = app->dbi->model('user')->select(where => {row_id => $session_user_row_id})->one;
+
+  my $op = param('op') || '';
+
+  # Authentication
+  unless ($api->logined) {
+    $self->redirect_to('/');
+    return;
+  }
+  
+  my $errors;
+  if (lc $self->req->method eq 'post') {
+    if ($op eq 'create') {
+      # Parameters
+      my $project_id = param('project');
+      my $description = param('description');
+      my $readme = param('readme');
+      my $private = param('private');
+      my $ptype = param('ptype');
+      
+      # Validator
+      my $vc = app->vc;
+      
+      # Validation
+      my $validation = $vc->validation;
+      
+      # "project"
+      if (!(defined $project_id && length $project_id)) {
+        $validation->add_failed(project => 'Repository name is empty');
+      }
+      elsif (length $project_id > 300) {
+        $validation->add_failed(project => 'Repository name is too long');
+      }
+      elsif (!$vc->check($project_id, 'project_name')) {
+        $validation->add_failed(project => 'Invalid repository name');
+      }
+      elsif (app->manager->exists_project($session_user->{id}, $project_id)) {
+        $validation->add_failed(project => 'Repository already exists');
+      }
+      
+      # "description"
+      $description ||= '';
+      if (length $description > 300) {
+        $validation->add_failed(description => 'description is too long');
+      }
+      
+      # "readme"
+      $readme = $readme ? 1 :0;
+      
+      # "private"
+      $private = $private ? 1 : 0;
+      
+      $ptype = $ptype ? 1 : 0;
+      # Git
+      if ($validation->is_valid) {
+        # Not logined
+        unless ($api->logined) {
+          return $self->reply->exception;
+        }
+        
+        my $manager = app->manager;
+        # Create repository
+        eval {
+          $manager->create_project(
+            $session_user->{id},
+            $project_id,
+            {description => $description, readme => $readme, private => $private, proj_type => $ptype}
+          );
+        };
+        
+        if (my $e = $@) {
+          app->log->error(url_for . ": $e");
+          $errors = ['Internal error'];
+        }
+        else {
+          $self->redirect_to("/$session_user->{id}/$project_id");
+          return;
+        }
+      }
+      else { $errors = $validation->messages }
+    }
+  }
+%>
+
+% layout 'common', title => 'Create a New Repository';
+
+  %= include '/include/header', no_project_header => 1;
+  
+  <div class="new-container">
+    % if ($errors) {
+      <div class="alert alert-error">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        % for my $error (@$errors) {
+          <p><%= $error %></p>
+        % }
+      </div>
+    % }
+    <div class="new-title-container">
+      <div class="new-title">
+        Create a new repository
+      </div>
+    </div>
+    <form action="<%= url_for->query(op => 'create') %>" method="post">
+      <div class="new-repository">
+        <table>
+          <tr>
+            <td>
+              <b>Owner</b>
+            </td>
+            <td>
+            
+            </td>
+            <td>
+              <b>Repository name</b>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <i class="icon-user"></i><%= $session_user->{id} %>
+            </td>
+            <td style="padding:0 10px">
+              /
+            </td>
+            <td>
+              <%= text_field 'project'%>
+            </td>
+          </tr>
+        </table>
+        <div class="2th-child">
+          <b>Description</b> <span style="color:#767676">(optional)</span>
+        </div>
+        <div class="last-child">
+          <%= text_field 'description' %>
+        </div>
+      </div>
+      <ul class="new-private">
+        <li>
+          <div>
+            <%= radio_button private => 0, checked => undef %><span>Public</span>
+          </div>
+        </li>
+        <li>
+          <div>
+            <%= radio_button private => 1 %><span>Private</span>
+          </div>
+        </li>
+      </ul>
+      <div class="form-group">
+        <div class="d-flex justify-content-between mg-b-5">
+          <b>Project Type</b>
+        </div>
+            <label class="checkbox-inline"><input type="checkbox" name="ptype" value="1">Web</label>
+      </div><br>
+      <div class="new-readme">
+        <div>
+          <%= check_box readme => 1 %><span>Initialize this repository with a README<span>
+        </div>
+      </div>
+      
+      <input type="submit" class="btn btn-green btn-new" value="Create repository">
+    </form>
+  </div>
+  %= include '/include/footer';

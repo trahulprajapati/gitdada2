@@ -1,0 +1,48 @@
+<%
+  use Mojo::ByteStream ();
+  
+  my $api = gitprep_api;
+  
+  my $dir = stash('dir');
+  
+  # README
+  my $type = '';
+  my $lines;
+  my $readme_path = (defined $dir && $dir ne '') ? "$dir/README" : 'README';
+  eval { $lines = app->git->blob(app->rep_info($user, $project), $rev, $readme_path) };
+  my $readme_e;
+  
+  if ($lines) {
+    $type = 'plain';
+    my $readme = join "\n", @$lines;
+    $readme_e = Mojo::ByteStream->new($readme)->xml_escape->to_string;
+    $readme_e =~ s#(^|\s|[^\x00-\x7F])(http(?:s)?://.+?)($|\s|[^\x00-\x7F])#$1<a href="$2">$2</a>$3#msg;
+  }
+  else {
+    eval { $lines = app->git->blob(app->rep_info($user, $project), $rev, "$readme_path.md") };
+    if ($lines) {
+      $type = 'markdown';
+      my $readme = join "\n", @$lines;
+      $readme =~ s#^(\[.*\]:)(?!\s*https?://)\s*(\S*)#{"$1 " . url_for("/$user/$project/raw/$rev/$2")}#mge;
+      $readme =~ s#^(!\[.*\]\()(?!https?://)(\S*)#{$1 . url_for("/$user/$project/raw/$rev/$2")}#mge;
+      $readme =~ s#src="(?!https?://)(\S*)"#{'src="' . url_for("/$user/$project/raw/$rev/$1") . '"'}#mge;
+      
+      $readme_e = $api->markdown($readme);
+    }
+  }
+%>
+
+% if (defined $readme_e) {
+  <div class="readme">
+    <div class="readme-header">
+      <i class="icon-book"></i> <%= $type eq 'plain' ? 'README' : 'README.md' %>
+    </div>
+    <div class="readme-frame">
+      % if ($type eq 'plain') {
+        <pre class="plain-text"><%== $readme_e %></pre>
+      % } else {
+        <div class="markdown-body"><%== $readme_e %></div>
+      % }
+    </div>
+  </div>
+% }

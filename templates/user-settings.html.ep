@@ -1,0 +1,52 @@
+<%
+  # API
+  my $api = gitprep_api;
+  
+  # Parameters
+  my $op = param('op') || '';
+  my $user = param('user') || '';
+  
+  # Authentication
+  unless ($api->logined($user)) {
+    $self->redirect_to('/');
+    return;
+  }
+%>
+
+% layout 'common', title => 'Your Profile';
+  
+  %= include '/include/header';
+  
+  <div class="container">
+    <div class="user-settings">
+      <div class="left">
+        <ul>
+          <li class="active">
+            <a href="<%= url_for("/$user/_settings") %>">Profile</a>
+          </li>
+          <li>
+            <a href="<%= url_for("/$user/_settings/ssh") %>">SSH keys</a>
+          </li>
+        </ul>
+      </div>
+      <div class="right">
+        <div class="user-settings-container profile">
+          <div>
+            Profile
+          </div>
+          <div>
+            <ul>
+              <li>
+                <b>ID</b>: <%= $user %>
+              </li>
+              <li>
+                <a class="btn btn-small" href="<%= url_for("/reset-password")->query(user => $user) %>">Reset Password</a>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  %= include '/include/footer';

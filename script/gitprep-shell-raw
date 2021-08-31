@@ -1,0 +1,109 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use utf8;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+use lib "$FindBin::Bin/../extlib/lib/perl5";
+use Gitprep;
+
+my $debug = 0;
+
+# Project name pattern
+my $project_re = qr/$Gitprep::project_re$/;
+
+# User
+my $session_user_id = shift;
+die "User not specifed" unless defined $session_user_id;
+my $user_re = qr/$Gitprep::user_re/;
+
+# Application
+my $app = Mojo::Server->new->load_app("$FindBin::Bin/gitprep");
+
+# Git
+my $git = $app->git;
+
+# DBI
+my $dbi = $app->dbi;
+
+# SSH connection
+my $ssh_connection = $ENV{SSH_CONNECTION};
+warn "ssh_connection: $ssh_connection" if $debug;
+die "who the *heck* are you?\n" unless defined $ssh_connection;
+
+# SSH original command
+my $ssh_original_command = $ENV{SSH_ORIGINAL_COMMAND} || '';
+warn "ssh_original_command: $ssh_original_command" if $debug;
+
+# IP address
+my $ip = $ssh_connection || '(no-IP)';
+warn "ip: $ip" if $debug;
+$ip =~ s/ .*//;
+
+# Check new line of SSH original command
+my $ssh_original_command_tmp = $ssh_original_command;
+$ssh_original_command_tmp =~ s/[\n\r]+/<<newline>>/g;
+die "I don't like newlines in the command: $ssh_original_command\n"
+  if $ssh_original_command ne $ssh_original_command_tmp;
+
+# Project
+my ($verb, $user_id, $project_id) = parse_ssh_original_command($ssh_original_command);
+sanity($project_id);
+
+# Can access
+my $can_access;
+if ($session_user_id eq $user_id) {
+  $can_access = 1;
+}
+else {
+  $can_access = $app->gitprep_api->is_collaborator($session_user_id, $user_id, $project_id);
+}
+die qq|User "$session_user_id" can't access repository "$user_id/$project_id.git"\n|
+  unless $can_access; 
+
+# Command
+my $rep_info = $app->rep_info($user_id, $project_id);
+my $rep_git_dir = $rep_info->{git_dir};
+my $repository = "'$rep_git_dir'";
+my @git_shell_cmd = ("git", "shell", "-c", "$verb $repository");
+warn "@git_shell_cmd" if $debug;
+unless ($debug) {
+  system(@git_shell_cmd) == 0
+    or die "Can't execute command: @git_shell_cmd\n" ;
+}
+
+sub parse_ssh_original_command {
+  my $ssh_original_command = shift;
+
+  $ssh_original_command ||= '';
+
+  my $git_commands = "git-upload-pack|git-receive-pack|git-upload-archive";
+  if ($ssh_original_command =~ m(^($git_commands) '.*/($user_re)/([^\/]+?)\.git'$)) {
+    my ($verb, $user_id, $project_id) = ($1, $2, $3);
+    warn "User:$user_id, Project:$project_id" if $debug;
+    die "invalid repo name: '$project_id'\n" if $project_id !~ $project_re;
+    return ($verb, $user_id, $project_id);
+  }
+  else {
+    die "Invalid command: $ssh_original_command\n";
+  }
+}
+
+sub sanity {
+  my $project_id = shift;
+  die "'$project_id' contains bad characters\n" if $project_id !~ $project_re;
+  die "'$project_id' ends with a '/'\n"         if $project_id =~ m(/$);
+  die "'$project_id' contains '..'\n"           if $project_id =~ m(\.\.);
+}
+
+=head1 NAME
+
+gitprep-shell - AuthorizedKeysCommand for sshd
+
+=head1 USAGE
+
+  ./gitprep-shell-raw kimoto
+
+This command return user public_key
+

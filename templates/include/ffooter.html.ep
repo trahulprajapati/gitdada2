@@ -1,0 +1,6 @@
+<footer class="footer">
+    <div>
+    <a>GitDada@2020 All Rigth Reserved.
+    <span>Powered by <a href="<%= url_for('/') %>">ProNoor</a></span>
+    </div>
+</footer>

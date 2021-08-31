@@ -1,0 +1,13 @@
+<div class="footer">
+  <div class="container">
+    <div>
+      @ All Rights Reserved. <a href="#">GitDada USA</a> a <a href="http:www.pronoor.com">Pronoor Product</a>
+    </div>
+
+    % if (app->mode eq 'development') {
+      <div>
+        <a href="<%= url_for('/dbviewer') %>">DBViewer</a>
+      </div>
+    % }
+  </div>
+</div>

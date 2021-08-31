@@ -1,0 +1,724 @@
+<%
+  # API
+  my $api = gitprep_api;
+
+  # Parameters
+  my $base_user_id = param('user');
+  my $base_project_id = param('project');
+  my $base_branch = param('rev1');
+  my $user_id_and_target_branch = param('rev2');
+  my $page = param('page') || 0;
+  my $expand = param('expand');
+  
+  # Default base branch
+  $base_branch //= app->manager->default_branch($base_user_id, $base_project_id);
+  
+  # Base project
+  my $base_project = app->dbi->model('project')->select(
+    [
+      '"project"."row_id" as "row_id"', 
+      '"project"."user" as "user"',
+      '"project"."id" as "id"', 
+      '"project"."default_branch" as "default_branch"',
+      '"project"."original_project" as "original_project"',
+      '"project"."private" as "private"',
+      '"project"."ignore_space_change" as "ignore_space_change"',
+      '"project"."guess_encoding" as "guess_encoding"',
+      '"project"."website_url" as "website_url"', 
+      '"project"."proj_type" as "proj_type"',
+      '"user"."id" as "user.id"'
+    ],
+    where => {'project.id' => $base_project_id, 'user.id' => $base_user_id}
+  )->one;
+  
+  # my $base_project = app->dbi->model('project')->select(
+  #   [
+  #     {__MY__ => '*'},
+  #     {user => ['id']}
+  #   ],
+  #   where => {'project.id' => $base_project_id, 'user.id' => $base_user_id}
+  # )->one;
+  
+  # Get target user, project, branch
+  my $target_user_id;
+  my $target_branch;
+  my $target_project;
+  if (defined $user_id_and_target_branch && $user_id_and_target_branch =~ /^([^:]+):(.+)/) {
+    $target_user_id = $1;
+    $target_branch = $2;
+    $target_project = $self->app->manager->child_project($base_user_id, $base_project_id, $target_user_id);
+  }
+  else {
+    $target_user_id = $base_user_id;
+    $target_branch = $user_id_and_target_branch // $base_branch;
+    $target_project = $base_project
+  }
+
+  # Already pull request exists
+  my $pull_request_already = app->dbi->model('pull_request')->select(
+    where => {
+      base_project => $base_project->{row_id},
+      base_branch => $base_branch,
+      target_project => $target_project->{row_id},
+      target_branch => $target_branch
+    }
+  )->one;
+  
+  # Git
+  my $git = $self->app->git;
+  
+  my $errors;
+  if (lc $self->req->method eq 'post') {
+  
+    my $op = param('op');
+    
+    if ($op eq 'create-pull-request') {
+      
+      if ($pull_request_already) {
+        $self->render_exception("Error");
+      }
+      
+      # Parameters
+      my $title = param('title');
+      my $message = param('message');
+      
+      # Validation
+      my $vc = app->vc;
+      my $validation = $vc->validation;
+      
+      # Check title
+      if (!(defined $title && length $title)) {
+        $validation->add_failed(title => 'title is empty');
+      }
+      elsif (length $title > 300) {
+        $validation->add_failed(title => 'title is too long');
+      }
+      
+      # Message
+      if (!(defined $message && length $message)) {
+        $message = '';
+        if (length $message > 1000) {
+          $validation->add_failed(message => 'message is too long');
+        }
+      }
+      
+      if ($validation->is_valid) {
+      
+        my $project_row_id = app->dbi->model('project')->select(
+          'project.row_id',
+          where => {'user.id' => $base_user_id, 'project.id' => $base_project_id}
+        )->value;
+        
+        my $pull_request = app->dbi->model('pull_request')->select(
+          where => {
+            base_project => $project_row_id,
+            base_branch => $base_branch,
+            target_project => $target_project->{row_id},
+            target_branch => $target_branch
+          }
+        )->one;
+        
+        my $issue;
+        if ($pull_request) {
+          $issue = app->dbi->model('issue')->select(
+            where => {pull_request => $pull_request->{row_id}}
+          )->one;
+          $self->redirect_to("/$base_user_id/$base_project_id/pull/$issue->{number}");
+          return;
+        }
+        else {
+          my $now_tm = Time::Moment->now_utc;
+          my $now_epoch = $now_tm->epoch;
+          my $session_user_row_id = $api->session_user_row_id;
+          my $issue_number;
+          app->dbi->connector->txn(sub {
+            
+            # New pull request
+            my $new_pull_request = {
+              base_project => $project_row_id,
+              base_branch => $base_branch,
+              target_project => $target_project->{row_id},
+              target_branch => $target_branch,
+            };
+            
+            # last pull request row id
+            app->dbi->model('pull_request')->insert($new_pull_request);
+            my $new_pull_request_row_id = app->dbi->execute("select LAST_INSERT_ROWID()")->value;
+            
+            # issue number
+            $issue_number = app->dbi->model('issue')->select(
+              'max(number)',
+              where => {project => $project_row_id},
+              append => 'group by project'
+            )->value;
+            $issue_number++;
+            
+            # New issue
+            my $new_issue = {
+              title => $title,
+              open => 1,
+              open_time => $now_epoch,
+              open_user => $session_user_row_id,
+              pull_request => $new_pull_request_row_id,
+              project => $project_row_id,
+              number => $issue_number
+            };
+            app->dbi->model('issue')->insert($new_issue);
+            my $new_issue_row_id = app->dbi->execute("select LAST_INSERT_ROWID()")->value;
+            
+            # New issue message
+            my $new_issue_message = {
+              issue => $new_issue_row_id,
+              number => 1,
+              message => $message,
+              create_time => $now_epoch,
+              update_time => $now_epoch,
+              user => $session_user_row_id
+            };
+            
+            app->dbi->model('issue_message')->insert($new_issue_message);
+          });
+          
+          $self->redirect_to("/$base_user_id/$base_project_id/pull/$issue_number");
+          return;
+        }
+      }
+      else {
+        $errors = $validation->messages;
+      }
+    }
+  }
+
+  # Can merge
+  my $base_rep_info = app->rep_info($base_user_id, $base_project_id);
+  my $merge_success;
+  my $target_rep_info;
+  if ($target_project) {
+    $target_rep_info = app->rep_info($target_user_id, $target_project->{id});
+  }
+  else {
+    $target_rep_info = $base_rep_info;
+  }
+    
+  # Create working repository if it don't exist
+  $self->app->manager->create_work_rep($base_user_id, $base_project_id);
+  
+  # Lock working repository
+  my $work_rep_info = app->work_rep_info($base_user_id, $base_project_id);
+  {
+    my $lock_fh = $self->app->manager->lock_rep($work_rep_info);
+    
+    # Prepare merge
+    $self->app->manager->prepare_merge(
+      $work_rep_info,
+      $base_rep_info,
+      $base_branch,
+      $target_rep_info,
+      $target_branch
+    );
+    
+    # Check merge automatically
+    $merge_success = $self->app->manager->merge(
+      $work_rep_info,
+      $target_rep_info,
+      $target_branch
+    );
+  }
+  
+  # Commits
+  my $commits = $git->forward_commits(
+    $work_rep_info,
+    $base_rep_info,
+    $base_branch,
+    $target_rep_info,
+    $target_branch
+  );
+
+  my $commits_count = @$commits;
+  my $commits_date = {};
+  my $authors = {};
+  for my $commit (@$commits) {
+    my $date = $commit->{age_string_date_local};
+    $commits_date->{$date} ||= [];
+    $authors->{$commit->{author}} = 1;
+    push @{$commits_date->{$date}}, $commit;
+  }
+  my $authors_count = keys %$authors;
+
+  # Start commit
+  my $start_commit_id = app->git->ref_to_object_id($base_rep_info, $base_branch);
+
+  # End commit
+  my $end_commit_id = app->git->ref_to_object_id($target_rep_info, $target_branch);
+  
+  if (!$start_commit_id || !$end_commit_id) {
+    $self->reply->not_found;
+    return;
+  }
+  
+  # Member projects
+  my $member_projects = app->manager->member_projects($base_user_id, $base_project_id);
+  unshift @$member_projects, $base_project;
+  
+  # Base branches
+  my $base_branches = $git->branches($base_rep_info);
+  @$base_branches = sort { $a->{commit}{age} <=> $b->{commit}{age} } @$base_branches;
+
+  # Target branches
+  my $target_branches = $git->branches($target_rep_info);
+  @$target_branches = sort { $a->{commit}{age} <=> $b->{commit}{age} } @$target_branches;
+  
+  # Can open pull request
+  my $can_open_pull_request;
+  if (keys %$commits_date && $expand) {
+    $can_open_pull_request = 1;
+  }
+  
+  # commit_body args
+  my %commit_body_args = (
+    user => $target_user_id,
+    project => $target_project->{id},
+    rep_info => $work_rep_info,
+    rev => $end_commit_id,
+    from_rev => $start_commit_id
+  );
+
+  layout 'common', title => "Comparing $base_branch...$target_branch \x{30fb} $base_user_id/$base_project_id";
+%>
+
+
+%= javascript begin
+  $(document).ready(function () {
+
+    // Change base fork
+    $('#base-fork-btn').on('click', function () {
+      $('#base-fork-popup')
+        .css('display', 'block')
+        .css('top', '40px')
+        .css('left', '10px')
+      ;
+    });
+    $('#base-fork-popup').on('click', function () {
+      $('#base-fork-popup').css('display', 'none');
+    });
+    // close popup
+    $(document).click(function() { $('#base-fork-popup').hide(); });
+    $('#base-fork-btn').click(function() { event.stopPropagation(); });
+    $('#base-fork-popup').click(function() { event.stopPropagation(); });
+
+
+    // Change head fork
+    $('#head-fork-btn').on('click', function () {
+      $('#head-fork-popup')
+        .css('display', 'block')
+        .css('top', '40px')
+        .css('left', '10px')
+      ;
+    });
+    $('#head-fork-popup').on('click', function () {
+      $('#head-fork-popup').css('display', 'none');
+    });
+    // close popup
+    $(document).click(function() { $('#head-fork-popup').hide(); });
+    $('#head-fork-btn').click(function() { event.stopPropagation(); });
+    $('#head-fork-popup').click(function() { event.stopPropagation(); });
+
+    // Change base branch
+    $('#base-branch-btn').on('click', function () {
+      $('#base-branch-popup')
+        .css('display', 'block')
+        .css('top', '40px')
+        .css('left', '10px')
+      ;
+    });
+    $('#base-branch-close').on('click', function () {
+      $('#base-branch-popup').css('display', 'none');
+    });
+    $('[name=base-branch]').on('keypress', function (e) {
+      // Enter
+      if (e.which == 13) {
+        var href;
+        % if ($base_user_id eq $target_user_id) {
+          href = '<%= url_for("/$base_user_id/$base_project_id/compare/") %>' + $(this).val() + '...<%= $target_branch %>';
+        % } else {
+          href = '<%= url_for("/$base_user_id/$base_project_id/compare/") %>' + $(this).val() + '...<%= $target_user_id %>:<%= $target_branch %>';
+        % }
+        
+        if (<%= $expand ? 1 : 0 %>) {
+          href = href + '?expand=1';
+        }
+        
+        location.href = href;
+      }
+    });
+    // close popup
+    $(document).click(function() { $('#base-branch-popup').hide(); });
+    $('#base-branch-btn').click(function() { event.stopPropagation(); });
+    $('#base-branch-popup').click(function() { event.stopPropagation(); });
+    
+    // Change compare branch
+    $('#target-branch-btn').on('click', function () {
+      $('#target-branch-popup')
+        .css('display', 'block')
+        .css('top', '40px')
+        .css('left', '96px')
+      ;
+    });
+    $('#target-branch-close').on('click', function () {
+      $('#target-branch-popup').css('display', 'none');
+    });
+    $('[name=target-branch]').on('keypress', function (e) {
+      // Enter
+      if (e.which == 13) {
+        var href = '<%= url_for("/$base_user_id/$base_project_id/compare/") %>' + '<%= $base_branch %>...' + $(this).val();
+        if (<%= $expand ? 1 : 0 %>) {
+          href = href + '?expand=1';
+        }
+        location.href = href;
+      }
+    });
+    // close popup
+    $(document).click(function() { $('#target-branch-popup').hide(); });
+    $('#target-branch-btn').click(function() { event.stopPropagation(); });
+    $('#target-branch-popup').click(function() { event.stopPropagation(); });
+
+    %= include '/include/add_issue_form_js';
+  });
+% end
+
+%= javascript begin
+  $(document).ready(function () {
+    $('#comapre-across-btn').on('click', function () {
+      $('#base-fork-btn').toggle();
+      $('#head-fork-btn').toggle();
+    });
+  });
+% end
+
+%= include '/include/header';
+
+<div class="container">
+  %= include '/include/errors', errors => $errors;
+  
+  <div class="topic1">
+    % if ($can_open_pull_request) {
+      Open a pull request
+    % } else {
+      Compare changes
+    % }
+  </div>
+  <div class="compare-desc">
+    Compare changes across branches, commits, tags, and more below. If you need to, you can also <a href="javascript:void(0)" id="comapre-across-btn">compare across forks</a>.
+  </div>
+  <div class="compare-select">
+    <div>
+      <div>
+        <div style="display:inline-block">
+          <button id="base-fork-btn" class="btn btn-small" style="<%= $base_user_id eq $target_user_id ? 'display:none' : '' %>">
+            <span>base fork:</span><b> <%= $base_project->{'user.id'} %>/<%= $base_project->{id} %></b><i class="icon-arrow-down"></i>
+          </button>
+          <button id="base-branch-btn" class="btn btn-small">
+            <span>base:</span><b> <%= $base_branch %></b><i class="icon-arrow-down"></i>
+          </button>
+          ...
+        </div>
+        <div style="display:inline-block;margin-top:10px;">
+          <button id="head-fork-btn" class="btn btn-small" style="<%= $base_user_id eq $target_user_id ? 'display:none' : '' %>">
+            <span>head fork:</span><b> <%= $target_project->{'user.id'} %>/<%= $target_project->{id} %></b><i class="icon-arrow-down"></i>
+          </button>
+          <button id="target-branch-btn" class="btn btn-small">
+            <span>compare:</span> <b><%= $target_branch %></b><i class="icon-arrow-down"></i>
+          </button>
+          
+          % if ($can_open_pull_request) {
+            % if ($merge_success) {
+              <span style="margin-left:10px">
+                <span style="color:green;font-weight:bold"><%= "\x{2714}" %>Able to merge.</span> These branches can be automatically merged.
+              </span>
+            % } else {
+              <span style="margin-left:10px">
+                <span style="color:red;font-weight:bold">Not able to merge.</span> These branches can't be automatically merged.
+              </span>
+            % }
+          % }
+        </div>
+      </div>
+    </div>
+
+    <div id="base-branch-popup" style="display:none;width:330px;position:absolute">
+      <div class="radius-top border-gray" style="background:#E6E6FA;padding:10px">
+        <div style="overflow:hidden">
+          <div style="float:left;width:90%;">
+            <b>Choose a base branch</b>
+          </div>
+          <div style="float:left:width:10%;text-align:right;">
+            <i id="base-branch-close" class="icon-remove-circle"></i>
+          </div>
+        </div>
+      </div>
+      <div class="border-gray" style="background:#F5F5F5;border-top:none;border-bottom:none;text-align:center;padding:10px 0">
+        %= text_field 'base-branch', style => 'margin-bottom:0;width:270px', placeholder => 'Branch, tag, commit, or history marker';
+      </div>
+      <div style="background:white;max-height:500px;overflow:auto;">
+        <ul class="nav nav-tabs nav-stacked">
+          % for (my $i = 0; $i < @$base_branches; $i++) {
+            % my $branch = $base_branches->[$i];
+              <li>
+                <%
+                  my $url;
+                  if ($base_user_id eq $target_user_id) {
+                    $url = url_with("/$base_user_id/$base_project_id/compare/$branch->{name}...$target_branch");
+                  }
+                  else {
+                    $url = url_with("/$base_user_id/$base_project_id/compare/$branch->{name}...$target_user_id:$target_branch");
+                  }
+                %>
+                <a style="border-top-left-radius:0px;border-top-right-radius:0px;"
+                  href="<%= $url  %>">
+                  <%= $branch->{name} %>
+                </a>
+              </li>
+          % }
+        </ul>
+      </div>
+    </div>
+
+    <div id="target-branch-popup" style="display:none;width:330px;position:absolute">
+      <div class="radius-top border-gray" style="background:#E6E6FA;padding:10px">
+        <div style="overflow:hidden">
+          <div style="float:left;width:90%;">
+            <b>Choose a compare branch</b>
+          </div>
+          <div style="float:left:width:10%;text-align:right;">
+            <i id="target-branch-close" class="icon-remove-circle"></i>
+          </div>
+        </div>
+      </div>
+      <div class="border-gray" style="background:#F5F5F5;border-top:none;border-bottom:none;text-align:center;padding:10px 0">
+        %= text_field 'target-branch', style => 'margin-bottom:0;width:270px', placeholder => 'Branch, tag, commit, or history marker';
+      </div>
+      <div style="background:white;max-height:500px;overflow:auto;">
+        <ul class="nav nav-tabs nav-stacked">
+          % for (my $i = 0; $i < @$target_branches; $i++) {
+            % my $target_branch = $target_branches->[$i];
+              <li>
+                <%
+                  my $url;
+                  if ($base_user_id eq $target_user_id) {
+                    $url = url_with("/$base_user_id/$base_project_id/compare/$base_branch...$target_branch->{name}");
+                  }
+                  else {
+                    $url = url_with("/$base_user_id/$base_project_id/compare/$base_branch...$target_user_id:$target_branch->{name}");
+                  }
+                %>
+                <a style="border-top-left-radius:0px;border-top-right-radius:0px;" href="<%= $url %>">
+                  <%= $target_branch->{name} %>
+                </a>
+              </li>
+          % }
+        </ul>
+      </div>
+    </div>
+
+
+    <div id="base-fork-popup" style="display:none;width:330px;position:absolute">
+      <div class="radius-top border-gray" style="background:#E6E6FA;padding:10px">
+        <div style="overflow:hidden">
+          <div style="float:left;width:90%;">
+            <b>Choose a base fork</b>
+          </div>
+          <div style="float:left:width:10%;text-align:right;">
+            <i id="member-project-close" class="icon-remove-circle"></i>
+          </div>
+        </div>
+      </div>
+      <div style="background:white;max-height:500px;overflow:auto;">
+        <ul class="nav nav-tabs nav-stacked">
+          % for (my $i = 0; $i < @$member_projects; $i++) {
+            % my $member_project = $member_projects->[$i];
+              <%
+                my $member_user_id = $member_project->{'user.id'};
+                my $member_project_id = $member_project->{id};
+              %>
+              <li>
+                <%
+                  my $url;
+                  if ($member_user_id eq $target_user_id) {
+                    $url = url_with("/$member_user_id/$member_project_id/compare/$base_branch...$target_branch");
+                  }
+                  else {
+                    $url = url_with("/$member_user_id/$member_project_id/compare/$base_branch...$target_user_id:$target_branch");
+                  }
+                %>
+                <a style="border-top-left-radius:0px;border-top-right-radius:0px;" href="<%= $url %>">
+                  <%= $member_user_id %>/<%= $member_project_id %>
+                </a>
+              </li>
+          % }
+        </ul>
+      </div>
+    </div>
+
+
+
+
+    <div id="head-fork-popup" style="display:none;width:330px;position:absolute">
+      <div class="radius-top border-gray" style="background:#E6E6FA;padding:10px">
+        <div style="overflow:hidden">
+          <div style="float:left;width:90%;">
+            <b>Choose a head fork</b>
+          </div>
+          <div style="float:left:width:10%;text-align:right;">
+            <i id="member-project-close" class="icon-remove-circle"></i>
+          </div>
+        </div>
+      </div>
+      <div style="background:white;max-height:500px;overflow:auto;">
+        <ul class="nav nav-tabs nav-stacked">
+          % for (my $i = 0; $i < @$member_projects; $i++) {
+            % my $member_project = $member_projects->[$i];
+              <%
+                my $member_user_id = $member_project->{'user.id'};
+                my $member_project_id = $member_project->{id};
+              %>
+              <li>
+                <%
+                  my $url;
+                  if ($member_user_id eq $base_user_id) {
+                    $url = url_with("/$base_user_id/$base_project_id/compare/$base_branch...$target_branch");
+                  }
+                  else {
+                    $url = url_with("/$base_user_id/$base_project_id/compare/$base_branch...$member_user_id:$target_branch");
+                  }
+                %>
+                <a style="border-top-left-radius:0px;border-top-right-radius:0px;" href="<%= $url %>">
+                  <%= $member_user_id %>/<%= $member_project_id %>
+                </a>
+              </li>
+          % }
+        </ul>
+      </div>
+    </div>
+  </div>
+  
+  % if ($pull_request_already) {
+    <%
+      my $issue = app->dbi->model('issue')->select(
+        where => {
+          project => $base_project->{row_id},
+          pull_request => $pull_request_already->{row_id}
+        }
+      )->one;
+    %>
+    
+    <div class="compare-pull-request-link">
+      <a href="<%= url_for("/$base_user_id/$base_project_id/pull/$issue->{number}") %>">
+        Pull request #<%= $issue->{number} %>
+      </a>
+    </div>
+  % } elsif (keys %$commits_date && $merge_success) {
+    <div class="issue-add-comment" style="width:80%">
+      <form action="<%= url_for %>" method="post">
+        <%= hidden_field op => 'create-pull-request' %>
+        <div class="issue-add-comment-header">
+          <div class="issue-add-comment-title">
+            <%= text_field 'title' => $commits->[0]{title_short} %>
+          </div>
+          <div class="issue-message-write-tab issue-add-comment-header-tab"><a href="javascript:void(0)">Write</a></div>
+          <div class="issue-message-preview-tab issue-add-comment-header-tab"><a class="disable" href="javascript:void(0)">Preview</a></div>
+          %= include '/include/issue_comment_icon';
+        </div>
+        <div class="issue-add-comment-body">
+          <div class="issue-message-write-area issue-add-comment-message">
+            <%= text_area 'message' %>
+          </div>
+          <div class="issue-message-preview-area issue-add-comment-preview markdown-body" style="padding:10px">
+          </div>
+          <div class="issue-add-comment-bottom">
+            <div class="issue-add-comment-button-left">
+              Styling with Markdown is supported
+            </div>
+            <div class="issue-add-comment-button">
+              <input type="submit" value="Create pull request" class="btn btn-green">
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+  % }
+
+  % if (keys %$commits_date) {
+    <ul class="compare-header">
+      <li>
+        <b><%= @$commits %></b> <span>commit</span>
+      </li>
+      <li>
+        <b><%= $authors_count %></b> <span>contributor</span>
+      </li>
+      <li>
+        
+      </li>
+      <li>
+        
+      </li>
+    </ul>
+    
+    <div class="commits">
+      % for my $date (reverse sort keys %$commits_date) {
+        % my $commits = $commits_date->{$date};
+        
+        <div class="commit-date">
+          <i class="icon-off"></i><span>Commits on <%= $date %></span>
+        </div>
+        
+        <ul class="compare-commits-date-container">
+          % for my $commit (sort {$b->{author_epoch} <=> $a->{author_epoch}} @$commits) {
+            <%
+              my $commit_author_email = $commit->{author_email};
+              my $commit_author_id = app->dbi->model('user')->select(
+                'id',
+                where => {email => $commit_author_email}
+              )->value;
+            %>
+            <li>
+              <div class="compare-commits-author">
+                <span title="<%= $commit->{author_email} %>">
+                  % if (defined $commit_author_id) {
+                    <a href="<%= url_for("/$commit_author_id") %>"><%= $commit_author_id %></a>
+                  % } else {
+                    <%= $commit->{author_name} %>
+                  % }
+                </span>
+              </div>
+              <div class="compare-commits-commit-title">
+                <a style="color:#333" href="<%= url_for("/$target_user_id/$target_project->{id}/commit/$commit->{id}") %>">
+                  <%= $commit->{title_short} %>
+                </a>
+              </div>
+              <div class="compare-commits-commit-id">
+                <a href="<%= url_for("/$target_user_id/$target_project->{id}/commit/$commit->{id}") %>">
+                  <%= substr($commit->{id}, 0, 7) %>
+                </a>
+              </div>
+            </li>
+          % }
+        </ul>
+      % }
+    </div>
+  
+    %= include '/include/commit_body', %commit_body_args;
+  % } else {
+    <div class="compare-nothing">
+      <div>
+        <b><big>There isn't anything to compare.</big></b>
+      </div>
+      <div>
+        <b>
+          <%= $base_branch %></b> is up to date with all commits from
+          <b><%= $target_branch %></b>.
+          Try <a href="<%= url_for("/$base_user_id/$base_project_id/compare/$target_branch...$base_branch") %>">switching the base</a> for your comparison.
+      </div>
+    </div>
+  % }
+</div>
+%= include '/include/footer';

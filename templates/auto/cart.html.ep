@@ -1,0 +1,28 @@
+<%
+        # API
+        my $api = gitprep_api;
+
+        # Operator
+        my $op = param('op') || '';
+
+        # DBI
+        my $dbi = $self->app->dbi;
+%>
+<form action="https://www.sandbox.paypal.com/cgi-bin/webscr" method="post" name="form-pp">
+	<input type="hidden" name="business" value="delwar0cse@gmail.com">
+	<input type="hidden" name="image_url" value="https://www.paypalobjects.com/en_US/i/btn/btn_cart_LG.gif">
+	<input type="hidden" name="charset" value="utf8">
+	<input type="hidden" name="item_name" value="Backup Storage">
+	<input type="hidden" name="item_number" value="1">
+	<input type="hidden" name="amount" value="10">
+	<input type="hidden" name="currency_code" value="USD">
+	<input type="hidden" name="cmd" value="_xclick">
+	<input type="hidden" name="no_note" value="1">
+	<input type="hidden" name="no_shipping" value="1">
+	<input type="hidden" name="return" value="http://gitdada.com/delwar">
+	<input type="hidden" name="rm" value="2">
+	<!-- This can be set in PayPal profile -->
+	<input type="hidden" name="notify_url" value="http://gitdada.com/test">
+	<input type="hidden" name="cancel_return" value="http://gitdada.com/">
+	<input type="submit" value="buy">
+</form>

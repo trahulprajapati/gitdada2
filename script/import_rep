@@ -1,0 +1,131 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use utf8;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+use lib "$FindBin::Bin/../extlib/lib/perl5";
+use Getopt::Long;
+use File::Basename 'basename';
+use Gitprep;
+use Encode 'decode';
+use Mojo::Server;
+
+no warnings;
+my $app = Mojo::Server->new->load_app("$FindBin::Bin/gitprep");
+my $dbi = $app->dbi;
+my $manager = $app->manager;
+my $git = $app->git;
+
+my $user_id;
+my $only_push;
+my $help;
+
+GetOptions(
+  'user=s' => \$user_id,
+  'help=s' => \$help
+);
+
+my $usage = <<'EOS';
+Usage:
+
+  ./import_rep -u USER REPOSITORY_DIR
+
+Example:
+
+  ./import_rep -u kimoto reps
+EOS
+
+
+my $rep_dir = shift;
+die "$usage\n" if !defined $rep_dir || $help;
+
+# Check user
+my $user = $dbi->model('user')->select(where => {id => $user_id})->one;
+die "User $user_id is not exists\n" unless $user;
+
+for my $rep (glob "$rep_dir/*") {
+
+  if (-d $rep && $rep =~ /\.git$/) {
+    my $project_id = basename $rep;
+    $project_id =~ s/\.git$//;
+    
+    my $project = $dbi->model('project')->select(
+      where => {'user.id' => $user_id, 'project.id' => $project_id}
+    )->one;
+    
+    # Create project
+    if ($project) {
+      warn "Repository $project_id Already exists : $@\n";
+    }
+    else {
+      eval {
+        $manager->create_project($user_id, $project_id);
+      };       
+      if ($@) {
+        warn "Can't creat repository $project_id: $@\n";
+      }
+      else {
+        warn "Create repository $project_id\n";
+      }
+    }
+    
+    # Copy description
+    my $description = do {
+      my $success = open my $fh, '<', "$rep/description";
+      
+      if ($success) {
+        local $/;
+        <$fh>
+      }
+      else {
+        '';
+      }
+    };
+    $description = decode('UTF-8', $description);
+    eval {$git->description(app->rep_info($user_id, $project_id), $description) };
+    if ($@) {
+      warn "Can't update description $project_id\n";
+    }
+    
+    # Push repository
+    chdir $rep
+      or warn "Can't change directory $rep: $!\n";
+    
+    my $remote_rep_info = $app->rep_info($user_id, $project_id);
+    my $remote_rep_git_dir = $remote_rep_info->{git_dir};
+    
+    # push branches
+    {
+      my @cmd = ('git', 'push', $remote_rep_git_dir, '--all');
+      system(@cmd) == 0
+        or warn "Can't push branches: @cmd";
+    }
+    
+    # push tags
+    {
+      my @cmd = ('git', 'push', $remote_rep_git_dir, '--tags');
+      system(@cmd) == 0
+        or warn "Can't push tags: @cmd";
+    }
+  }
+}
+
+=head1 NAME
+
+import_rep - Import existing repositories into GitPrep.
+
+=head1 USAGE
+
+  ./import_rep -u kimoto rep_dir
+
+rep_dir must contains git respoitories
+
+   rep_dir/project1.git
+          /project2.git
+          /project3.git
+          /project3.git
+
+If C<description> file exists in git repository, it is copied.
+

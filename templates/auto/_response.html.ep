@@ -1,0 +1,135 @@
+  <%
+  my $api = gitprep_api;
+
+  my $op = param('op') || '';
+  my ($rproject, $ruser, $own); 
+  my $jwt = param('jwt');
+  my $errors;
+  my $successMessage;
+
+  #get email id
+  if ($jwt) {
+    use Mojo::JWT;
+    use Crypt::JWT qw(decode_jwt);
+    my $ret = decode_jwt(token => $jwt, key => 'SeCreT#git#dada');
+    $rproject = $ret->{'rproject'};
+    $ruser = $ret->{'ruser'};
+    $own = $ret->{'own'};
+  } else {
+    $errors = ['Internal Error'];
+  }
+
+  ##################### op ############################
+  if ($op eq 'response') {
+  
+    # Parameters
+    my $accept = param('accept'); #represents username
+    my $decline = param('decline');
+    my $rproject = param('rproject');
+    my $ruser = param('ruser');
+    my $own = param('own');
+    if ($decline eq 'Decline') {
+      sleep 1;
+      $self->redirect_to("/");
+    } else {
+    # Validator
+      my $vc = app->vc;
+      
+      # Validation result
+      my $validation = $vc->validation;
+
+       # "password" check
+      if (!(defined $ruser)) {
+        $validation->add_failed(ruser => 'User Parameter is not found');
+      }elsif (!(defined $rproject)) {
+        $validation->add_failed(rproject => 'Project Parameter is not found');
+      } else {
+        my $row = app->dbi->model('collaboration')->select(
+          where => {project => $rproject, user => $ruser}
+        )->one;
+        if ($row) {
+          $validation->add_failed(collaborator => "Collaborator already exists");
+        }
+      } 
+      
+       #is_valid
+      if ($validation->is_valid) {
+         
+        # Encrypt password
+        eval {
+          my $rep = app->manager->add_collaborator($ruser, $rproject);
+          $self->redirect_to("/$own/$rep");
+        };
+        if (my $e = $@) {
+          app->log->error(url_for . ": $e");
+          $errors = ["Internal Error - Failed to accept request."];
+        }
+        else {
+            sleep 3;
+            $self->redirect_to("/");
+        }
+      }
+      else { 
+        my $error_arr = $validation->{'_failed_infos'};
+        my $message;
+        if ($error_arr) {
+          for (keys %$error_arr) {
+            next if (!$_);
+            my $msg_ref = $error_arr->{$_};
+            my $msg = $msg_ref->{'message'};
+            $message .= "$msg\n" if ($msg);
+          }
+        }
+        chomp $message;
+        $errors = [$message];
+      }
+    }
+  }
+%>
+
+%= javascript '/js/icon-input.js';
+
+% layout 'frontcommon', title => 'Response';
+ %= include '/include/fheader';
+  <div class="content content-fixed content-auth">
+    <div class="container">
+      <div class="media align-items-stretch justify-content-center ht-100p pos-relative">
+        <div class="media-body align-items-center d-none d-lg-flex">
+          <div class="mx-wd-600">
+            <img src="image/signup-banner.png" class="img-fluid" alt="" />
+          </div>
+          <!-- div class="pos-absolute b-0 l-0 tx-12 tx-center">
+            Workspace design vector is created by <a href="#" target="_blank">Bangladesh Software Professionm (bdsoftpro.com)</a>
+          </div> -->
+        </div><!-- media-body -->
+        <div class="sign-wrapper mg-lg-l-50 mg-xl-l-60">
+          <div class="wd-100p">
+            <h4 class="tx-color-01 mg-b-5">Response to the request</h4>
+             <p style="color: red">
+                <% if($errors){ %>
+                <% for (@$errors) { %>
+                  <%= $_ %>
+                <%}%>
+                <% } %>
+              </p>
+              <p style="color: green">
+                <% if($successMessage){ %>
+                <%= $successMessage %>
+                <% } %>
+              </p>
+            <form action="<%= url_for->query(op => 'response') %>" method="post">
+               <div class="form-group">
+                <input class="btn btn-brand-02" type="submit" name="accept" id="accept" value="Accept"> 
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                <input class="btn btn-brand-02" type="submit" name="decline" id="decline" value="Decline">
+                <input type="text" name="rproject" value="<%= $rproject %>" hidden=true>
+                <input type="text" name="ruser" value="<%= $ruser %>" hidden=true>
+                <input type="text" name="own" value="<%= $own %>" hidden=true>
+              </div>
+            </form>
+          </div>
+        </div><!-- sign-wrapper -->
+      </div><!-- media -->
+    </div><!-- container -->
+  </div><!-- content -->
+  %= include '/include/ffooter';

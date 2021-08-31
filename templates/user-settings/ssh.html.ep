@@ -1,0 +1,249 @@
+<%
+  # API
+  my $api = gitprep_api;
+  
+  # Parameters
+  my $op = param('op') || '';
+  my $user_id = param('user') || '';
+  
+  # Authentication
+  unless ($api->logined($user_id)) {
+    $self->redirect_to('/');
+    return;
+  }
+  
+  # Process form
+  my $errors;
+  if (lc $self->req->method eq 'post') {
+    # Add ssh key
+    if ($op eq 'add') {
+      # Paramerters
+      my $title = param('title');
+      my $original_key = param('key');
+      
+      # Validator
+      my $vc = app->vc;
+      
+      # Validation result
+      my $validation = $vc->validation;
+      
+      # "title"
+      if (!(defined $title && length $title)) {
+        $validation->add_failed(title => 'title is empty');
+      }
+      elsif (!$vc->check($title, 'ascii_graphic')) {
+        $validation->add_failed(title => 'title contains invalid character');
+      }
+      else {
+        my $ssh_public_key = app->dbi->model('ssh_public_key')->select(
+          where => {title => $title}
+        )->one;
+        
+        if ($ssh_public_key) {
+          $validation->add_failed(title => 'title already exists');
+        }
+      }
+      
+      # "key"
+      my $key;
+      if (!(defined $original_key && length $original_key)) {
+        $validation->add_failed(key => 'key is empty');
+      }
+      elsif (length $original_key > 2000) {
+        $validation->add_failed(key => 'key is too long');
+      }
+      else {
+        my $type;
+        my $original_key_edit;
+        if ($original_key =~ /^(ssh-rsa|ssh-dss|ecdsa-sha2-nistp25|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521) +(\S+)/) {
+          $type = $1;
+          $original_key_edit = $2;
+        }
+        
+        if (!$type) {
+          my $message = "Key is invalid. It must begin with 'ssh-rsa', 'ssh-dss', 'ecdsa-sha2-nistp256',"
+            . "'ecdsa-sha2-nistp384', or 'ecdsa-sha2-nistp521'. Check that you're copying the public half of the key";
+          $validation->add_failed(key => $message);
+        }
+        elsif (!$vc->check($original_key_edit, 'ascii_graphic')) {
+          $validation->add_failed(key => 'Key contains invalid character.');
+        }
+        else {
+          $key = "$type $original_key_edit";
+          
+          my $row = app->dbi->model('ssh_public_key')->select(
+            where => {key => $key}
+          )->one;
+          
+          if ($row) {
+            $validation->add_failed(key => 'Key already exists');
+          }
+          else {
+            my $key_is_contained;
+            my $authorized_keys_file = app->manager->authorized_keys_file;
+            if (defined $authorized_keys_file) {
+              my $result
+                = app->manager->parse_authorized_keys_file($authorized_keys_file);
+
+              my $before_part = $result->{before_part};
+              my $after_part = $result->{after_part};
+              my $other_part = "$before_part\n$after_part";
+              if ($other_part =~ /\s\Q$original_key_edit\E(\s|$)/) {
+                $key_is_contained = 1;
+              }
+            }
+            
+            if ($key_is_contained) {
+              $validation->add_failed(key => "authorized_keys file already contain this key");
+            }
+          }
+        }
+      }
+      
+      # Register ssh key
+      if ($validation->is_valid) {
+        my $session_user_row_id = $api->session_user_row_id;
+        my $p = {
+          user => $session_user_row_id,
+          title => $title,
+          key => $key
+        };
+        eval {
+          app->dbi->connector->txn(sub {
+            app->dbi->model('ssh_public_key')->insert($p);
+            $self->app->manager->update_authorized_keys_file;
+          });
+        };
+        
+        if (my $e = $@) {
+          app->log->error(url_for . ":$e");
+          $errors = ['Internal error'];
+        }
+        else {
+          flash('message' => 'Success: ssh key is added');
+          $self->redirect_to('current');
+          return;
+        }
+      }
+      else {
+        $errors = $validation->messages;
+      }
+    }
+    # Delete ssh public key
+    elsif ($op eq 'delete') {
+      my $row_id = param('row-id');
+      
+      eval {
+        app->dbi->connector->txn(sub {
+          app->dbi->model('ssh_public_key')->delete(where => {row_id => $row_id});
+          $self->app->manager->update_authorized_keys_file;
+        });
+      };
+      
+      if (my $e = $@) {
+        app->log->error(url_with . ": $e");
+        $errors = ['Internal Error'];
+      }
+      else {
+        flash(message => 'Success: a key is deleted');
+        $self->redirect_to('current');
+      }
+    }
+  }
+  
+  my $keys = app->dbi->model('ssh_public_key')->select(
+    [
+      '"ssh_public_key"."row_id" as "row_id"',
+      '"ssh_public_key"."key" as "key"',
+      '"ssh_public_key"."user" as "user"',
+      '"ssh_public_key"."title" as "title"'
+    ],
+    where => {'user.id' => $user_id},
+    append => 'order by title'
+  )->all;
+  # my $keys = app->dbi->model('ssh_public_key')->select(
+  #   {
+  #     __MY__ => '*'
+  #   },
+  #   where => {'user.id' => $user_id},
+  #   append => 'order by title'
+  # )->all;
+%>
+
+% layout 'common', title => 'SSH keys';
+
+  %= include '/include/header';
+  
+  <div class="container">
+    <div class="user-settings">
+      <div class="left">
+        <ul>
+          <li>
+            <a href="<%= url_for("/$user_id/_settings") %>">Profile</a>
+          </li>
+          <li class="active">
+            <a href="<%= url_for("/$user_id/_settings/ssh") %>">SSH keys</a>
+          </li>
+        </ul>
+      </div>
+      <div class="right">
+        <%= include '/include/errors', errors => $errors %>
+        <%= include '/include/message', message => flash('message') %>
+        
+        <div class="user-settings-container ssh-keys">
+          <div>
+            <div>
+              <span>SSH Keys</span> (<a href="<%= url_for("/$user_id.keys") %>">see</a>)
+            </div>
+          </div>
+          <div>
+            % if (@$keys > 0) {
+              <div>
+                This is a list of SSH keys associated with your account. Remove any keys that you do not recognize.
+              </div>
+              % for my $key (@$keys) {
+                <form action="<%= url_for->query(op => 'delete') %>" method="post">
+                  <div>
+                    <b><%= $key->{title} %></b>
+                    <a class="btn btn-danger btn-delete" href="javascript:void(0)" onclick="$(this).closest('form').submit()">Delete</a>
+                    <%= hidden_field 'row-id' => $key->{row_id} %>
+                  </div>
+                </form>
+              % }
+            % } else {
+              <div>
+                SSH key don't exists.
+              </div>
+            % }
+          </div>
+        </div>
+        
+        <div class="user-settings-container ssh-key-add">
+          <div>
+            <div>
+              Add an SSH Key
+            </div>
+          </div>
+          <div>
+            <form action="<%= url_for->query(op => 'add') %>" method="post" %>
+              <div>
+                Title
+              </div>
+              <div>
+                <%= text_field 'title' %>
+              </div>
+              <div>
+                Key
+              </div>
+              <div>
+                <%= text_area 'key' %>
+              </div>
+              <input type="submit" class="btn btn-green btn-new" value="Add key">
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  %= include '/include/footer';

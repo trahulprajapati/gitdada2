@@ -1,0 +1,169 @@
+<%
+  # API
+  my $api = gitprep_api;
+  
+  # Paramters
+  my $user_id = param('user');
+  my $project_id = param('project');
+  my $diff = param('diff');
+  my ($from_rev, $rev) = $diff =~ /(.+)\.\.(.+)/;
+  $rev = $diff unless defined $rev;
+
+  my $is_wiki = (stash('tab') // '') eq 'wiki';
+  my $user_project_path = "/$user_id/$project_id";
+  if ($is_wiki) {
+    $user_project_path .= '/wiki';
+  }
+  my $rep_info = $is_wiki ? app->wiki_rep_info($user_id, $project_id) : app->rep_info($user_id, $project_id);
+
+  # Git
+  my $git = app->git;
+  
+  # Commit
+  my $commit = $git->get_commit($rep_info, $rev);
+  
+  unless ($commit) {
+    $self->reply->not_found;
+    return;
+  }
+  my $author_date
+    = $git->parse_date($commit->{author_epoch}, $commit->{author_tz});
+  my $committer_date
+    = $git->parse_date($commit->{committer_epoch}, $commit->{committer_tz});
+  $commit->{author_date} = $git->timestamp($author_date);
+  $commit->{committer_date} = $git->timestamp($committer_date);
+  $from_rev = $commit->{parent} unless defined $from_rev;
+  my $commit_short_id = substr($commit->{id}, 0, 7, );
+  my $commit_author_email = $commit->{author_email};
+  my $commit_author_id = app->dbi->model('user')->select(
+    'id',
+    where => {email => $commit_author_email}
+  )->value;
+  
+  # Branches
+  my $branch_refs = $git->references($rep_info, 'heads');
+  my $branches = $branch_refs->{$commit->{id}} || [];
+  
+  # Tags
+  my $tag_refs = $git->references($rep_info, 'tags');
+  my $tags = $tag_refs->{$commit->{id}} || [];
+  
+  # commit_body args
+  my %commit_body_args = (
+    user => $user_id,
+    project => $project_id,
+    rev => $rev,
+    from_rev => $from_rev
+  );
+
+  layout 'common', title => "$commit->{title_short} \x{30fb} $commit_short_id";
+%>
+
+%= include '/include/header';
+
+<div class="container">
+  <ul class="commits-summary">
+    <li>
+      <ul class="commits-summary-header">
+        <li>
+          <div>
+            % if ($commit->{title_short} eq $commit->{title}) {
+              <b><%= $commit->{title_short} %></b>;
+            % } else {
+              <%
+                my $title_short = $commit->{title_short};
+                $title_short =~ s/\.\.\.\s*$//;
+                my $title_tail = $commit->{title};
+                $title_tail =~ s/^\Q$title_short//;
+                $title_tail =~ s/^\s+//;
+              %>
+              <p><b><%= $title_short %>...</b></p>
+              <p>...<%= $title_tail %></p>
+            % }
+          </div>
+
+          % if (@{$commit->{comment}} > 1) {
+            <div>
+              % for (my $i = 1; $i < @{$commit->{comment}}; $i++) {
+                <div>
+                  <%= $commit->{comment}[$i] %>
+                </div>
+              % }
+            </div>
+          % }
+          % unless ($is_wiki) {
+            % if (@$branches || @$tags) {
+              <div>
+                % for my $branch (@$branches) {
+                  <i class="icon-share-alt" style="padding-right:1px"></i><a href="<%= url_for("$user_project_path/tree/$branch") %>"><%= $branch %></a>
+                % }
+                
+                % for my $tag (@$tags) {
+                  <span style="padding-left:5px">
+                    <i class="icon-tag" style="padding-right:2px"></i><a href="<%= url_for("$user_project_path/tree/$tag") %>"><%= $tag %></a>
+                  </span>
+                % }
+              </div>
+            % }
+          % }
+        </li>
+        <li class="last-child">
+          % unless ($is_wiki) {
+            <a class="btn btn-primary" href="<%= url_for("$user_project_path/tree/$commit->{id}") %>">
+              Browse files
+            </a>
+          % }
+        </li>
+      </ul>
+    </li>
+    <li class="last-child">
+      <ul class="commits-summary-body">
+        <li>
+          <span class="commits-summary-author">
+            % if (defined $commit_author_id) {
+              <a href="<%= url_for("/$commit_author_id") %>"><%= $commit_author_id %></a>
+            % } else {
+              <%= $commit->{author_name} %>
+            % }
+          </span>
+          <span>commited on <span title="<%= $commit->{age_string_datetime_local} %>"><%= $commit->{age_string_date_local} %></span>
+        </li>
+        <li class="last-child">
+          % my $parents = $commit->{parents};
+          
+          % if (@$parents == 0) {
+            <div class="commits-summary-parent">
+              <span>0 parent</span>
+            </div>
+          % } elsif (@$parents == 1) {
+            <div class="commits-summary-parent">
+              <span>1 parent</span>
+              <a href="<%= url_for("$user_project_path/commit/$parents->[0]") %>">
+                <%= substr($parents->[0], 0, 7) %>
+              </a>
+            </div>
+          % } else {
+            <div class="commits-summary-parent">
+              <span>2 parents</span>:
+              
+              <a class="font-black" href="<%= url_for("$user_project_path/commit/$parents->[0]") %>">
+                <%= substr($parents->[0], 0, 7) %>
+              </a>
+              +
+              <a class="font-black" href="<%= url_for("$user_project_path/commit/$parents->[1]") %>">
+                <%= substr($parents->[1], 0, 7) %>
+              </a>
+            </div>
+          % }
+          <div class="commits-summary-commit-id">
+            commit <span><%= $commit->{id} %></span>
+          </div>
+        </li>
+      </ul>
+    </li>
+  </ul>
+
+  %= include '/include/commit_body', %commit_body_args;
+</div>
+
+%= include '/include/footer';

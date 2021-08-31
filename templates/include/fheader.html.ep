@@ -1,0 +1,102 @@
+<%
+  my $api = gitprep_api;
+  my $logined = $api->logined;
+
+  my $session_user_row_id = session('user_row_id');
+  my $session_user = app->dbi->model('user')->select(where => {row_id => $session_user_row_id})->one;
+  
+  my $user_id = $self->param('user');
+
+  my $project_id = param('project');
+  
+  my $original_project;
+  my $is_private_project;
+  
+  my $no_project_header = stash('no_project_header');
+  
+  if (!$no_project_header && defined $project_id) {
+    $original_project = app->manager->original_project($user_id, $project_id);
+    $is_private_project = app->manager->is_private_project($user_id, $project_id);
+  }
+%>    
+<header class="navbar navbar-header navbar-header-fixed">
+    <a href="#" id="mainMenuOpen" class="burger-menu"><i data-feather="menu"></i></a>
+    <div class="navbar-brand">
+    <a href="/" class="df-logo">Git<span>Dada</span></a>
+    </div><!-- navbar-brand -->
+    <div id="navbarMenu" class="navbar-menu-wrapper">
+    <div class="navbar-menu-header">
+        <a href="/" class="df-logo">Git<span>Dada</span></a>
+        <a id="mainMenuClose" href="#"><i data-feather="x"></i></a>
+    </div><!-- navbar-menu-header -->
+    <ul class="nav navbar-menu">
+        <li class="nav-label pd-l-20 pd-lg-l-25 d-lg-none">Main Navigation</li>
+        <li class="nav-item with-sub">
+        <a href="#" class="nav-link"><i data-feather="pie-chart"></i> Why Gitdada?</a>
+        <div class="navbar-menu-sub">
+            <div class="d-lg-flex">
+            <ul>
+                <li class="nav-label"><a href="#">Features</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Code review</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Project management</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Integration</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Actions</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Packages</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Security</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Team management</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Hosting</a></li>
+                <div class="divider-vertical divider-vertical-color mg-t-20"></div>
+                <li class="nav-label mg-t-20"><a href="#">Customer strories</a></li>
+                <li class="nav-label"><a href="#">Security</a></li>
+            </ul>
+            </div>
+        </div>
+        </li>
+        <li class="nav-item"><a href="#" class="nav-link"><i data-feather="box"></i> Enterprise</a></li>
+        <li class="nav-item with-sub">
+        <a href="#" class="nav-link"><i data-feather="layers"></i> Explorer</a>
+        <div class="navbar-menu-sub">
+            <div class="d-lg-flex">
+            <ul>
+                <li class="nav-label"><a href="#">Explorer Gitdada</a></li>
+                <div class="divider-vertical divider-vertical-color mg-t-10"></div>
+                <li class="nav-label mg-t-10">Learn &amp; contribute</li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Topics</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Collections</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Trending</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Learning Labs</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Open source guides</a></li>
+                <div class="divider-vertical divider-vertical-color mg-t-20"></div>
+                <li class="nav-label mg-t-10">Connect with others</li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Events</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Community forum</a></li>
+                <li class="nav-sub-item"><a href="#" class="nav-sub-link">Gitdada Education</a></li>
+            </ul>
+            </div>
+        </div><!-- nav-sub -->
+        </li>
+        <li class="nav-item"><a href="#" class="nav-link"><i data-feather="box"></i> Marketplace</a></li>
+        <!-- <li class="nav-item with-sub">
+            <a href="#" class="nav-link"><i data-feather="layers"></i> Prices</a>
+            <div class="navbar-menu-sub">
+                <div class="d-lg-flex">
+                <ul>
+                    <li class="nav-label"><a href="#">Plans</a></li>
+                    <li class="nav-sub-item"><a href="#" class="nav-sub-link"><i data-feather="log-in"></i> Compare plans</a></li>
+                    <li class="nav-sub-item"><a href="#" class="nav-sub-link"><i data-feather="user-plus"></i> Contact Sales</a></li>
+                    <div class="divider-vertical divider-vertical-color mg-t-20"></div>
+                    <li class="nav-label mg-t-20"><a href="#">Nonprofit</a></li>
+                    <li class="nav-label"><a href="#">Education</a></li>
+                </ul>
+                </div>
+            </div>
+        </li> -->
+    </ul>
+    </div><!-- navbar-menu-wrapper -->
+    <div class="navbar-right">
+    <!-- <a href="#" class="btn btn-social"><i class="fab fa-dribbble"></i></a>
+    <a href="#" class="btn btn-social"><i class="fab fa-github"></i></a>
+    <a href="#" class="btn btn-social"><i class="fab fa-twitter"></i></a>-->
+    <a href="<%= url_for('/_signup') %>" class="btn btn-buy"><i data-feather="log-in"></i> <span>SignUp</span></a>
+    </div><!-- navbar-right -->
+</header><!-- navbar -->

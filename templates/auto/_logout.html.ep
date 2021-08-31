@@ -1,0 +1,7 @@
+<%
+  my $from = param('from') || '/';
+  session(expires => 1);
+  #$self->redirect_to($from);
+  $self->redirect_to('/');
+  return 1;
+%>

@@ -1,0 +1,17 @@
+<div class="issue-add-comment-icon">
+  <i class="icon-add-header-text icon icon-font" title="Add header text"></i>
+  <i class="icon-add-bold-text icon icon-bold" title="Add bold text"></i>
+  <i class="icon-add-italic-text icon icon-italic" title="Add italic text"></i>
+  <span style="margin-left:10px"></span>
+  <i class="icon-insert-quote icon icon-comment" title="Insert a quote"></i>
+  <i class="icon-insert-code icon icon-file" title="Insert a code"></i>
+  <i class="icon-add-link icon icon-map-marker" title="Add a link"></i>
+  <span style="margin-left:10px"></span>
+  <i class="icon-add-bulleted-list icon icon-list" title="Add a bulleted list"></i>
+  <i class="icon-add-numbered-list icon icon-th-list" title="Add a numbered list"></i>
+  <span style="margin-left:10px"></span>
+  <i class="icon-mension-user icon icon-user" title="Directory mension a user"></i>
+  <!--
+    <i class="icon-reference-issue icon icon-bookmark" title="Reference a issue or pull request"></i>
+  -->
+</div>

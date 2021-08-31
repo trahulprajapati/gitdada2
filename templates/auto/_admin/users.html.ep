@@ -1,0 +1,202 @@
+<%
+  my $op = param('op') || '';
+  my $api = gitprep_api;
+  
+  my $errors;
+  if ($op eq 'delete' && lc $self->req->method eq 'post') {
+    
+    # Parameters
+    my $user_id = param('user');
+    
+    # Validator
+    my $vc = app->vc;
+    
+    # Validation result
+    my $validation = $vc->validation;
+    
+    # "user" check
+    if (!(defined $user_id && length $user_id)) {
+      $validation->add_failed(user => 'User name is empty.');
+    }
+
+    if ($validation->is_valid) {
+      
+      # Delete user
+      my $count;
+      eval { $count = app->manager->delete_user($user_id) };
+      if (my $e = $@) {
+        app->log->error(url_for . ": $e");
+        $errors = ['Internal Error'];
+      }
+      elsif ($count == 0) {
+        app->log->error("/_admin/users?op=delete: User $user_id not exists");
+        $errors = ['Internal Error'];
+      }
+      else {
+        $self->flash(message => "User $user_id is deleted.");
+        $self->redirect_to('current');
+        return;
+      }
+    }
+    else { $errors = $validation->messages }
+  }
+
+  #activate and deactivate user 
+  # currently not suspending accounts
+  if($op eq 'updateStatus') {
+    my $user_id = param('user');
+    my $current_status = param('current_status');
+    my $params = {};
+
+    if ($current_status eq 0){
+      $params->{status} = 1;
+      eval { app->dbi->model('user')->update($params, where => {id => $user_id}) };
+      $self->flash(message => "User $user_id has been deactivated.");
+      $self->redirect_to('current');
+      return;
+    }
+    elsif($current_status eq 1){
+      $params->{status} = 0;
+      eval { app->dbi->model('user')->update($params, where => {id => $user_id}) };
+      $self->flash(message => "User $user_id has been activated.");
+      $self->redirect_to('current');
+      return;
+    }
+    elsif($current_status eq 2) {
+      $params->{status} = 0;
+      eval { app->dbi->model('user')->update($params, where => {id => $user_id}) };
+      $self->flash(message => "User $user_id has been activated.");
+      $self->redirect_to('current');
+      return;
+    }
+    else {
+      $self->flash(message => "Error updating user status.");
+      $self->redirect_to('current');
+      return;
+    }
+  }
+  
+  my $users = app->dbi->model('user')->select(
+    where => {admin => 0},
+    append => 'order by id'
+  )->all;
+%>
+
+% layout 'common', title => 'Admin Users';
+
+  %= javascript begin
+    $(document).ready(function () {
+      
+      // Confirm delete
+      $('.delete-btn').on('click', function () {
+        var user = $(this).attr('user');
+        
+        var input = window.prompt(
+          'Are you really delete user "' + user
+          + '". User and user\'s all repositories are deleted. Please input user name.'
+        );
+        
+        if (user === input) {
+          return true;
+        }
+        else {
+          return false;
+        }
+      }); 
+
+      $('#users').DataTable();
+
+    });
+  % end
+
+  %= include '/include/header';
+  <link rel="stylesheet" type="text/css" href="//cdn.datatables.net/1.10.12/css/jquery.dataTables.min.css" />
+  <script src="//cdn.datatables.net/1.10.12/js/jquery.dataTables.min.js"></script>
+  <div class="container">
+
+    % if (my $message = flash('message')) {
+      <div class="alert alert-success">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        %= $message;
+      </div>
+    % }
+    
+    % if ($errors) {
+      <div class="alert">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        % for my $error (@$errors) {
+          <p><%= $error %></p>
+        % }
+      </div>
+    % }
+    
+    <h3 class="topic1">Admin Users</h3>
+    <div style="margin-bottom:10px"><a class="btn" href="<%= url_for('/_admin/user/create') %>">Create User</a></div>
+    <div class="container">
+      <table id="users" class="admin-users">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+	        <th>Space Used/Max</th>
+          <th>Mail</th>
+	        <th>Status</th>
+          <th>Action</th>
+        </tr>
+        </thead>
+        <tbody>
+        % for my $user (@$users) {
+          <tr>
+            % my $uid = $user->{id};
+            % my $current_status = $user->{status};
+            <td>
+              <a href="<%= url_for("/$uid") %>"><%= $uid %></a>
+            </td>
+            <td>
+              <%= $user->{name} %>
+            </td>
+	          <td>
+                <%
+                my $Dir = File::Size->new(
+                    dir            => app->rep_home."/".$user->{id},
+                    blocksize      => 1024,
+                    followsymlinks => 1,
+                    humanreadable  => 1
+                  );
+                my $human = Number::Bytes::Human->new(bs => 1000, round_style => 'round', precision => 2);
+                my $MaxSize = $human->format($user->{maxsize});
+                %>
+              <%= $Dir->getsize()." / ".$MaxSize %>
+            </td>
+            <td>
+              <%= $user->{email} %>
+            </td>
+	          <td>
+              % my @status = ("Active", "Inactive", "Suspended");
+	            
+             <form action="<%= url_for->query(op => 'updateStatus') %>" method="post">
+                %= hidden_field user => $uid;
+                <input type="hidden" name="current_status" value="<%= $current_status %>">
+                <input type="hidden" name="user" value="<%= $uid %>">
+                <input type="submit" class="btn" value="<%= $status[$user->{status}]  %>">
+              </form>
+            </td>
+            <td>
+              <a class="btn" href="<%= url_for('/_admin/user/update')->query(id => $uid) %>">Settings</a>
+              <a class="btn" href="<%= url_for('/reset-password')->query(user => $uid) %>">Reset Password</a>
+              <form action="<%= url_for->query(op => 'delete') %>" method="post">
+                %= hidden_field user => $uid;
+                <input type="submit" class="btn delete-btn" style="color:red" user="<%= $uid %>" value="Delete">
+              </form>
+            </td>
+          </tr>
+          
+        % }
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div style="text-align:center;margin:20px 0"><big><a href="<%= url_for('/_admin') %>">Admin page</a></big></div>
+  
+  %= include '/include/footer';
+  

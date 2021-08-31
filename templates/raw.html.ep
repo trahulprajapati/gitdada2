@@ -1,0 +1,38 @@
+<%
+  # Git
+  my $git = app->git;
+
+  # Parameters
+  my $user_id = param('user');
+  my $project_id = param('project');
+  my $rev_file = param('rev_file');
+
+  my $is_wiki = (stash('tab') // '') eq 'wiki';
+  my $user_id_project_path = "/$user_id/$project_id";
+  if ($is_wiki) {
+    $user_id_project_path .= '/wiki';
+  }
+  my $rep_info = $is_wiki ? app->wiki_rep_info($user_id, $project_id) : app->rep_info($user_id, $project_id);
+
+  my ($rev, $file) = $git->parse_rev_path($rep_info, $rev_file);
+  
+  # Blob raw
+  my $blob_raw = $git->blob_raw($rep_info, $rev, $file);
+  
+  # Content type
+  my $type = $git->blob_content_type($rep_info, $rev, $file);
+
+  # File name
+  my $file_name = $rev;
+  if (defined $file) { $file_name = $file }
+  elsif ($type =~ m/^text\//) { $file_name .= '.txt' }
+  
+  # Content disposition
+  my $content_disposition = "inline; filename*=UTF-8''" . Encode::encode('UTF-8', $file_name);
+  
+  # Response
+  $self->res->headers->content_disposition($content_disposition);
+  $self->res->headers->content_type($type);
+  $self->render(data => $blob_raw);
+  return;
+%>

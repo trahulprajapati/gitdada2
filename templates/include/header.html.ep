@@ -1,0 +1,193 @@
+<%
+  my $api = gitprep_api;
+  my $logined = $api->logined;
+
+  my $session_user_row_id = session('user_row_id');
+  my $session_user = app->dbi->model('user')->select(where => {row_id => $session_user_row_id})->one;
+  
+  my $user_id = $self->param('user');
+
+  my $project_id = param('project');
+  
+  my $original_project;
+  my $is_private_project;
+  
+  my $no_project_header = stash('no_project_header');
+  
+  if (!$no_project_header && defined $project_id) {
+    $original_project = app->manager->original_project($user_id, $project_id);
+    $is_private_project = app->manager->is_private_project($user_id, $project_id);
+  }
+%>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.16.0/umd/popper.min.js"></script>
+<script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
+<div class="header">
+  <div class="container">
+    <div class="header-left">
+      <div class="title"><a href="<%= url_for('/') %>">GitDada</a></div>
+      % if ((url_for->path->parts->[0] || '') ne '_search') {
+        <form class="header-search" action="<%= url_for('/_search') %>">
+          <%= text_field 'q', style => 'display:inline-block;width:350px', placeholder => 'Search' %>
+        </form>
+      % }
+    </div>
+    <div class="header-right">
+      <div class="header-rigth-container">
+        % if ($api->logined) {
+          % unless ($session_user->{id} eq 'admin') {
+          <div class="header-btn-container">
+              <a class="btn" href="<%= url_for("/_new") %>">Create a new repo</a>
+          </div>
+          <div class="header-btn-container">   
+              <a class="btn" href="<%= url_for("/$session_user->{id}/_settings") %>">Account Settings</a>
+          </div>
+          <!-- <div class="dropdown">
+            <button type="button" class="btn dropdown-toggle" data-toggle="dropdown">
+              Dropdown button
+            </button>
+            <div class="dropdown-menu">
+              <a class="btn" href="<%= url_for("/$session_user->{id}/_settings") %>">Account Settings</a> -->
+          <!-- <div class="dropdown header-btn-container">
+              <button class="dropbtn">Action</button>
+              <div class="dropdown-content">
+                <a class="btn" href="<%= url_for("/$session_user->{id}/_settings") %>">Account Settings</a>
+                <a class="btn" href="<%= url_for("/$session_user->{id}/_settings") %>">Account </a> -->
+            <!-- <div class="header-btn-container">   
+              <a class="btn" href="<%= url_for("/$session_user->{id}/_settings") %>">Account Settings</a>
+            </div> -->
+          % }
+          % my $url = url_with->to_abs;
+           <!-- <a href="<%= url_for("/_logout?from=$url") %>">Logout</a>
+                          </div>
+          </div> -->
+          <div class="header-btn-container">
+            <a class="btn" href="<%= url_for("/_logout?from=$url") %>">Logout</a>
+          </div> 
+
+	  % if ($api->logined_admin) {
+	  <div class="header-login-container">
+		<a href="<%= url_for("/_admin/reset-password") %>">Reset Password</a>
+	  </div>
+	  % }
+          <!-- Logined as <%= $session_user->{id} %> -->
+          <div class="header-login-container">
+            <i class="icon-user"></i>
+            % if ($api->logined_admin) {
+              <a href="<%= url_for("/_admin") %>"><%= $session_user->{id} %></a>
+            % } else {
+                <a href="<%= url_for("/$session_user->{id}") %>"><%= $session_user->{id} %></a>
+            % }
+          </div>
+        % } else {
+          <div class="header-btn-container">
+            <a class="btn" href="<%= url_for('/') %>">Login</a>
+          </div>
+        % }
+      </div>
+    </div>
+  </div>
+</div>
+
+% if (!$no_project_header && (defined $user_id || defined $project_id)) {
+  <div class="project-header">
+    <div class="container" style="overflow:hidden">
+      <div class="project-header-left">
+        <ul class="breadcrumb">
+          <li><a href="<%= url_for('/') %>"><i class="icon-home"></i></a></li>
+          /
+          <li><a href="<%= url_for("/$user_id") %>"><%= $user_id %></a></li>
+          % if (defined $project_id) {
+            /
+            <li><b><a href="<%= url_for("/$user_id/$project_id") %>"><%= $project_id %></a></b></li>
+          % }
+          
+          % if ($is_private_project) {
+            <i class="icon icon-lock" style="margin-left:5px;margin-right:5px"></i>
+          % }
+          
+          % if (defined $original_project) {
+            <small>
+              (
+                forked from
+                <a href="<%= url_for("/$original_project->{'user.id'}/$original_project->{id}") %>">
+                  <%= "$original_project->{'user.id'}/$original_project->{id}" %>
+                </a>
+              )
+            </small>
+          % }
+        </ul>
+      </div>
+      <div class="project-header-right">
+        <div class="project-header-right-container">
+          % if (defined $project_id) {
+            <div class="project-header-btn-container">
+              % if ($logined && $session_user->{id} ne $user_id ) {
+                <a href="<%= url_for("/$user_id/$project_id/fork") %>" class="btn btn-fork">Fork</a>
+              % } else {
+                <button class="btn btn-fork disabled" disabled>Fork</button>
+              % }
+            </div>
+          % }
+        </div>
+      </div>
+    </div>
+    % if (defined $project_id) {
+      <%
+        my $tab = stash('tab') || 'code';
+      %>
+      <div class="container">
+        <div class="project-tabs">
+          <div class="container">
+            <ul>
+              <li class="<%= $tab eq 'code' ? 'active' :  '' %>">
+                <a href="<%= url_for("/$user_id/$project_id") %>">
+                  <i class="icon-chevron-right"></i>
+                  Code
+                </a>
+              </li>
+              <li class="<%= $tab eq 'issues' ? 'active' :  '' %>">
+                <a href="<%= url_for("/$user_id/$project_id/issues") %>">
+                  <i class="icon-comment"></i>
+                  Issues <div class="header-issue-count"><%= $api->get_open_issue_count($user_id, $project_id) %></div>
+                </a>
+              </li>
+              <li class="<%= $tab eq 'pulls' ? 'active' :  '' %>">
+                <a href="<%= url_for("/$user_id/$project_id/pulls") %>">
+                  <i class="icon-retweet"></i>
+                  Pull request <div class="header-issue-count"><%= $api->get_open_pull_request_count($user_id, $project_id) %></div>
+                </a>
+              </li>
+              <li class="<%= $tab eq 'wiki' ? 'active' :  '' %>">
+                <a href="<%= url_for("/$user_id/$project_id/wiki") %>">
+                  <i class="icon-edit"></i>
+                  Wiki
+                </a>
+              </li>
+              <li class="<%= $tab eq 'graph' ? 'active' :  '' %>">
+                <a href="<%= url_for("/$user_id/$project_id/network") %>" >
+                  <i class="icon-align-center"></i>
+                  Members
+                </a>
+              </li>
+              % if ($logined && $user_id eq $session_user->{id}) {
+                <li class="<%= $tab eq 'settings' ? 'active' :  '' %>">
+                  <a href="<%= url_for("/$user_id/$project_id/settings") %>">
+                    <i class="icon-cog"></i>
+                    Settings
+                  </a>
+                </li>
+              % }
+            </ul>
+          </div>
+        </div>
+      </div>
+    % }
+    <div style="position:relative;border-top:#d8d8d8 1px solid"></div>
+  </div>
+% } else {
+  <div style="min-height:1px;margin-bottom:10px"></div>
+% }

@@ -1,0 +1,489 @@
+<%
+  # API
+  my $api = gitprep_api;
+
+  # Parameters
+  my $user_id = param('user');
+  my $project_id = param('project');
+  my $title = param('title');
+  my $new = param('new');
+  my $edit = param('edit');
+  my $list_pages = param('list-pages');
+
+  # Maybe mojolicious bug? In FreeBSD, String is not decoded.
+  eval { $title = Encode::decode('UTF-8', $title) };
+  
+  my $project_row_id = $api->get_project_row_id($user_id, $project_id);
+  
+  my $wiki = app->dbi->model('wiki')->select(where => {project => $project_row_id})->one;
+  
+  my $content;
+  my $content_md;
+  my $pages;
+  
+  # Logined
+  my $logined = $api->logined;
+
+  # Wiki repository URL
+  my $url = url_for->to_abs;
+  $url->base(undef);
+  my $ssh_port = config->{basic}{ssh_port};
+  my $rep_home = app->rep_home;
+  my $execute_user = getpwuid($>);
+  my $ssh_rep_url_base = defined app->config->{basic}{'ssh_rep_url_base'}
+    ? app->config->{basic}{'ssh_rep_url_base'} : $rep_home;
+  my $ssh_rep_url = "ssh://$execute_user\@" . $url->host
+    . ($ssh_port ? ":$ssh_port" : '') . "$ssh_rep_url_base/$user_id/$project_id.wiki.git";
+  
+  # Display type
+  my $display;
+  
+  my $errors;
+  if ($self->req->method eq 'POST') {
+    my $op = param('op') // '';
+    
+    # Ajax request
+    if ($self->req->is_xhr) {
+      if ($op eq 'ajax-preview') {
+        my $content = param('content');
+        my $content_md = $api->markdown_wiki($user_id, $project_id, $content);
+        
+        $self->render(json => {markdown => $content_md});
+        return;
+      }
+      elsif ($op eq 'ajax-delete') {
+        $api->delete_wiki_page($user_id, $project_id, $title);
+        
+        flash(message => "Deleted $title");
+        
+        $self->render(json => {success => 1});
+        return;
+      }
+    }
+    # Form request
+    else {
+      if ($op eq 'create') {
+        
+        my $update_title = param('update-title');
+        my $original_title = param('original-title');
+        my $content = param('content');
+        my $commit_message = param('commit-message');
+        
+        # Validation
+        my $vc = app->vc;
+        my $validation = $vc->validation;
+        
+        # Title
+        if (!length $update_title) {
+          $validation->add_failed(title => 'Page title is empty.');
+        }
+        elsif ($title =~ /^_/) {
+          if ($title ne '_Sidebar' && $title ne '_Footer') {
+            $validation->add_failed(title => 'Page title can\'t start with _.');
+          }
+        }
+        
+        if ($validation->is_valid) {
+          # Rename and update page
+          if (defined $original_title && length $original_title && $update_title ne $original_title) {
+            if (!length $commit_message) {
+              $commit_message = "Renamed $original_title to $update_title and updated $update_title";
+            }
+            $api->rename_and_update_wiki_page($user_id, $project_id, $original_title, $update_title, $content, $commit_message);
+          }
+          # Create or update page
+          else {
+            if (!length $commit_message) {
+              $commit_message = "Updated $update_title";
+            }
+            $api->create_wiki_page($user_id, $project_id, $update_title, $content, $commit_message);
+          }
+          
+          $self->redirect_to("/$user_id/$project_id/wiki/$update_title");
+          return;
+        }
+        else {
+          $errors = $validation->messages;
+        }
+      }
+    }
+  }
+
+  my $exists_sidebar;
+  my $exists_footer;
+  my $content_sidebar_md;
+  my $content_footer_md;
+
+  # Pages count
+  my $pages_count;
+  
+  # Commits number
+  my $commits_number;
+
+  if ($new) {
+    $display = 'new';
+    unless ($wiki) {
+      $title = 'Home';
+    }
+  }
+  else {
+    if ($wiki) {
+      $pages_count = $api->get_wiki_pages_count($user_id, $project_id);
+      $commits_number = app->git->commits_number(app->wiki_rep_info($user_id, $project_id), 'master');
+      
+      if ($edit) {
+        $content = $api->get_wiki_page_content($user_id, $project_id, $title);
+        if (defined $content) {
+          $display = 'edit';
+        }
+        else {
+          $display = 'new';
+        }
+      }
+      elsif ($list_pages) {
+        $display = 'list-pages';
+        # Pages
+        $pages = $api->get_wiki_pages($user_id, $project_id);
+      }
+      else {
+        if (($title // '') eq 'Home') {
+          $self->redirect_to("/$user_id/$project_id/wiki");
+          return;
+        }
+        else {
+          $title //= 'Home';
+          $content = $api->get_wiki_page_content($user_id, $project_id, $title);
+          
+          if (defined $content) {
+            # Convert wiki link to markdonw link
+            $content_md = $api->markdown_wiki($user_id, $project_id, $content);
+            $display = 'page';
+            
+            # Side bar
+            $exists_sidebar = $api->exists_wiki_page($user_id, $project_id, '_Sidebar');
+            if ($exists_sidebar) {
+              my $content_sidebar = $api->get_wiki_page_content($user_id, $project_id, '_Sidebar');
+              $content_sidebar_md = $api->markdown($content_sidebar);
+            }
+            
+            # Footer
+            $exists_footer = $api->exists_wiki_page($user_id, $project_id, '_Footer');
+            if ($exists_footer) {
+              my $content_footer = $api->get_wiki_page_content($user_id, $project_id, '_Footer');
+              $content_footer_md = $api->markdown($content_footer);
+            }
+          }
+          else {
+            $display = 'new';
+          }
+        }
+      }
+    }
+    else {
+      $display = 'init';
+    }
+  }
+  
+  layout 'common', title => "Wiki - $user_id/$project_id";
+%>
+
+  %= javascript '/js/icon-input.js';
+
+  %= javascript begin
+    $(document).ready(function () {
+      
+      // Initialize icon input
+      init_icon_input();
+
+      // Click write tab
+      $('.wiki-message-write-tab').on('click', function () {
+        var form = $(this).closest('form');
+        
+        form.find('.wiki-message-write-tab').find('a').attr('class', '');
+        form.find('.wiki-message-preview-tab').find('a').attr('class', 'disable');
+        form.find('.wiki-message-write-area').css('display', 'block');
+        form.find('.wiki-message-preview-area').css('display', 'none');
+      });
+
+      // Click preview tab
+      $('.wiki-message-preview-tab').on('click', function () {
+        var form = $(this).closest('form');
+
+        form.find('.wiki-message-write-tab').find('a').attr('class', 'disable');
+        form.find('.wiki-message-preview-tab').find('a').attr('class', '');
+        form.find('.wiki-message-write-area').css('display', 'none');
+        form.find('.wiki-message-preview-area').css('display', 'block');
+        
+        var content = form.find('[name=content]').val();
+
+        form.find('.wiki-message-preview-area').html('');
+        $.post('<%= url_for %>', {op : "ajax-preview", content : content}, function (result) {
+          var markdown = result.markdown;
+          form.find('.wiki-message-preview-area').html(markdown);
+        });
+      });
+      
+      // Repository URL buttons
+      var http_rep_url = '<%= url_for("$user/$project.wiki.git")->to_abs %>';
+      
+      var logined = <%= $logined ? 'true' : 'false' %>;
+      var ssh_rep_url = '<%= $ssh_rep_url %>';
+      
+      // Click HTTP button
+      $('#btn_http').on('click', function () {
+        $('#rep_url').val(http_rep_url);
+        $('#btn_http').addClass('btn-info');
+        $('#btn_ssh').removeClass('btn-info');
+      });
+
+      // Click SSH button
+      $('#btn_ssh').on('click', function () {
+        $('#rep_url').val(ssh_rep_url);
+        $('#btn_http').removeClass('btn-info');
+        $('#btn_ssh').addClass('btn-info');
+      });
+
+      // Initialize
+      if (logined) {
+        $('#btn_ssh').trigger('click');
+      }
+      else {
+        $('#btn_http').trigger('click');
+      }
+      
+      // Click delete page
+      $('#wiki-btn-delete-page').on('click', function () {
+        if (window.confirm('This page is deleted. OK?')) {
+          $.post('<%= url_for %>', {op : "ajax-delete", title : "<%= $title %>"}, function (result) {
+            if (result.success) {
+              location.href="<%= url_for("/$user_id/$project_id/wiki") %>";
+            }
+          });
+        }
+      });
+    });
+  % end
+
+  %= include '/include/header';
+  
+  <div class="container">
+    
+    <div class="wiki">
+      <div>
+        <%= include '/include/errors', errors => $errors %>
+        <%= include '/include/message', message => flash('message') %>
+      </div>
+      
+      % if ($display eq 'page' || $display eq 'list-pages') {
+        <ul class="wiki-count">
+          <li>
+            <a href="<%= url_for("/$user_id/$project_id/wiki") %>">
+              <span class="wiki-count-number">
+                <i class="icon-home" style="position:relative;top:-1px"></i>
+              </span>
+              <span class="wiki-count-type">
+                Home
+              </span>
+            </a>
+          </li>
+          <li>
+            <a href="<%= url_for("/$user_id/$project_id/wiki/_pages") %>">
+              <span class="wiki-count-number">
+                <i class="icon-leaf" style="position:relative;top:-1px"></i>
+                <%= $pages_count %>
+              </span>
+              <span class="wiki-count-type">
+                pages
+              </span>
+            </a>
+          </li>
+          <li>
+            <a href="<%= url_for("/$user_id/$project_id/wiki/commits/master") %>">
+              <span class="wiki-count-number">
+                <i class="icon-repeat" style="position:relative;top:-1px"></i>
+                <%= $commits_number %>
+              </span>
+              <span class="wiki-count-type">
+                commits
+              </span>
+            </a>
+          </li>
+        </ul>
+      % }
+        
+      <div class="wiki-top">
+        <div class="wiki-top-git-url">
+          % if ($display eq 'page' || $display eq 'list-pages') {
+            <ul class="git-url-container">
+              % if ($logined) {
+                <li>
+                  <button class="btn btn-info" id="btn_ssh">SSH</button>
+                </li>
+              % }
+              <li>
+                <button class="btn <%= !$logined ? 'btn-info' : '' %>" id="btn_http"><%= $self->req->is_secure ? 'HTTPS' : 'HTTP' %></button>
+              </li>
+              <li>
+                <input id="rep_url" type="text">
+              </li>
+            </ul>
+          % }
+        </div>
+        
+        <div class="wiki-top-buttons-box">
+          <ul class="wiki-top-buttons">
+            % if ($display eq 'page') {
+              <li>
+                <a class="wiki-btn-history" href="<%= url_for("/$user_id/$project_id/wiki/commits/master/$title.md") %>" >
+                  History
+                </a>
+              </li>
+              <li>
+                <a href="<%= url_for("/$user_id/$project_id/wiki/$title/_edit") %>">
+                  <button class="btn btn-new">Edit</button>
+                </a>
+              </li>
+            % }
+            % if ($display eq 'edit') {
+              <li>
+                <a id="wiki-btn-delete-page" href="javascript:void(0)">
+                  <button class="btn btn-delete">Delete page</button>
+                </a>
+              </li>
+            % }
+            % if ($display ne 'new' && $display ne 'init' && $display ne 'edit') {
+              <li>
+                <a href="<%= url_for("/$user_id/$project_id/wiki/_new") %>">
+                  <button class="btn btn-green btn-new">Create page</button>
+                </a>
+              </li>
+            % }
+          </ul>
+        </div>
+      </div>
+      
+      <div class="wiki-container">
+        % if ($display eq 'init') {
+          <h1 class="topic1">Wiki</h1>
+          <div>
+            <a href="<%= url_for("/$user_id/$project_id/wiki/_new") %>">
+              <button class="btn btn-green btn-new">Create page</button>
+            </a>
+          </div>
+        % } elsif ($display eq 'new' || $display eq 'edit') {
+          <%
+            my $h1_text;
+            my $submit_button_title;
+            if ($display eq 'new') {
+              $h1_text = 'Create page';
+              $submit_button_title = 'Create page';
+            }
+            else {
+              $h1_text = 'Edit page';
+              $submit_button_title = 'Save page';
+            }
+          %>
+          
+          <h1 class="topic1"><%= $h1_text %></h1>
+          <div class="wiki-edit-form">
+            <form action="<%= url_for %>" method="POST">
+              <%= hidden_field op => 'create' %>
+              <%= hidden_field 'original-title' => $title %>
+              <label>
+                <div class="wiki-edit-form-title">
+                  %= text_field 'update-title' => $title, placeholder => 'Title';
+                </div>
+              </label>
+              <div class="wiki-add-comment">
+                <div class="wiki-add-comment-header">
+                  <div class="wiki-message-write-tab wiki-add-comment-header-tab"><a href="javascript:void(0)">Write</a></div>
+                  <div class="wiki-message-preview-tab wiki-add-comment-header-tab"><a class="disable" href="javascript:void(0)">Preview</a></div>
+                  <div class="wiki-add-comment-icon">
+                    <i class="icon-add-header-text icon icon-font" title="Add header text"></i>
+                    <i class="icon-add-bold-text icon icon-bold" title="Add bold text"></i>
+                    <i class="icon-add-italic-text icon icon-italic" title="Add italic text"></i>
+                    <span style="margin-left:10px"></span>
+                    <i class="icon-insert-quote icon icon-comment" title="Insert a quote"></i>
+                    <i class="icon-insert-code icon icon-file" title="Insert a code"></i>
+                    <i class="icon-add-link icon icon-map-marker" title="Add a link"></i>
+                    <span style="margin-left:10px"></span>
+                    <i class="icon-add-bulleted-list icon icon-list" title="Add a bulleted list"></i>
+                    <i class="icon-add-numbered-list icon icon-th-list" title="Add a numbered list"></i>
+                    <span style="margin-left:10px"></span>
+                    <i class="icon-mension-user icon icon-user" title="Directory mension a user"></i>
+                    <!--
+                      <i class="icon-reference-issue icon icon-bookmark" title="Reference a issue or pull request"></i>
+                    -->
+                  </div>
+                </div>
+                <div class="wiki-add-comment-body">
+                  <div class="wiki-message-write-area wiki-add-comment-message">
+                    %= text_area 'content' => $content;
+                  </div>
+                  <div class="wiki-message-preview-area wiki-add-comment-preview markdown-body" style="padding:10px">
+                  </div>
+                </div>
+              </div>
+              <label>
+                <div class="wiki-edit-form-commit-message-description">
+                  Edit message(Optional)
+                </div>
+                <div class="wiki-edit-form-commit-message">
+                  %= text_field 'commit-message';
+                </div>
+              </label>
+              <div class="wiki-edit-form-create-page-btn">
+                <%= submit_button $submit_button_title, class => 'btn btn-green btn-new' %>
+              </div>
+            </form>
+          </div>
+        % } elsif ($display eq 'page') {
+          <div class="wiki-left">
+            <div class="wiki-header">
+              <%= $title %>
+            </div>
+            <div class="wiki-frame">
+              <div class="markdown-body"><%== $content_md %></div>
+            </div>
+            % if ($exists_footer) {
+              <div class="wiki-footer">
+                <%== $content_footer_md %>
+              </div>
+            % } elsif ($title ne '_Sidebar' && $title ne '_Footer') {
+              <div class="wiki-add-footer">
+                <a href="<%= url_for("/$user_id/$project_id/wiki/_Footer") %>">+ Add footer</a>
+              </div>
+            % }
+          </div>
+          <div class="wiki-right">
+            % if ($exists_sidebar) {
+              <div class="wiki-side-bar">
+                <%== $content_sidebar_md %>
+              </div>
+            % } elsif ($title ne '_Sidebar' && $title ne '_Footer') {
+              <div class="wiki-add-side-bar">
+                <a href="<%= url_for("/$user_id/$project_id/wiki/_Sidebar") %>">+ Add side bar</a>
+              </div>
+            % }
+          </div>
+        % } elsif ($display eq 'list-pages') {
+          <div class="wiki-left">
+            <div class="wiki-header">
+              Pages
+            </div>
+            <div class="wiki-frame">
+              <ul class="wiki-list-pages">
+                % for my $page (@$pages) {
+                  <li>
+                    <a href="<%= url_for("/$user_id/$project_id/wiki/$page") %>"><%= $page %></a>
+                  </li>
+                % }
+              </ul>
+            </div>
+          </div>
+        % }
+      </div>
+    </div>
+  </div>
+  
+  %= include '/include/footer';

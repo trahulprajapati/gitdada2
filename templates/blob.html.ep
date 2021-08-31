@@ -1,0 +1,153 @@
+<%
+  # API
+  my $api = gitprep_api;
+
+  # Git
+  my $git = $self->app->git;
+  
+  # Parameters
+  my $user_id = param('user');
+  my $project_id = param('project');
+  my $rev_file = param('rev_file');
+
+  my $is_wiki = (stash('tab') // '') eq 'wiki';
+  my $user_id_project_path = "/$user_id/$project_id";
+  if ($is_wiki) {
+    $user_id_project_path .= '/wiki';
+  }
+  my $rep_info = $is_wiki ? app->wiki_rep_info($user_id, $project_id) : app->rep_info($user_id, $project_id);
+
+  my ($rev, $file) = $git->parse_rev_path($rep_info, $rev_file);
+
+  # Commit
+  my $commit = $git->last_change_commit($rep_info, $rev, $file);
+  my $commit_author_email = $commit->{author_email};
+  my $commit_author_id = app->dbi->model('user')->select(
+    'id',
+    where => {email => $commit_author_email}
+  )->value;
+
+  # Authors
+  my $authors = $git->authors($rep_info, $rev, $file);
+  
+  # File size
+  my $file_size = $git->blob_size($rep_info, $rev, $file);
+  
+  # File mode
+  my $mode = $git->blob_mode($rep_info, $rev, $file);
+  my $file_type = $git->file_type_long($mode);
+  
+  # MIME type
+  my $mime_type = $git->blob_mime_type($rep_info, $rev, $file);
+
+  # Blob lines(only text)
+  my $lines;
+  $lines = $git->blob($rep_info, $rev, $file) if $mime_type =~ /^text/;
+
+  # Variables for included template
+  stash(id => $rev, project => $project_id, rev => $rev);
+%>
+
+<% layout 'common' , title => "$project_id/$file at $rev \x{30fb} $user_id/$project_id",
+     stylesheets => ['/js/google-code-prettify/prettify.css']; %>
+
+%
+  %= include '/include/header';
+
+  <div class="container">
+    % unless ($is_wiki) {
+      <div style="margin-bottom:20px;">
+        %= include '/include/branch_select', display => 'blob', Path => $file;
+      </div>
+    % }
+
+    <div class="commit-summary">
+      <div class="commit-summary-left-container">
+        <span class="commit-summary-author" title="<%= $commit->{author_email} %>">
+          % if (defined $commit_author_id) {
+            <a href="<%= url_for("/$commit_author_id") %>"><%= $commit_author_id %></a>
+          % } else {
+            <%= $commit->{author_name} %>
+          % }
+        </span>
+        <a href="<%= url_for("$user_id_project_path/commit/$rev") %>">
+          <%= $commit->{title} %>
+        </a>
+      </div>
+      <div class="commit-summary-right-container">
+        <a href="<%= url_for("$user_id_project_path/commit/$commit->{id}") %>">
+          <%= substr($commit->{id}, 0, 7) %>
+        </a>
+        <span title="<%= $commit->{age_string_datetime_local} %>"><%= $commit->{age_string} %></span>
+      </div>
+    </div>
+          
+    <div class="commit-contributor">
+      <%= @$authors %> contributor
+    </div>
+
+    <div>
+      <div class="file-header">
+        <div class="file-header-left">
+          % if ($lines) {
+            <%= @$lines %> lines
+            <span style="color:#dcdcdc">|</span>
+          % }
+          <%= $file_size %>kb
+        </div>
+        <div class="file-header-right">
+          <ul>
+            <li>
+              <a class="btn btn-small" href="<%= url_for("$user_id_project_path/raw/$rev/$file") %>">Raw</a>
+            </li>
+            % if ($mime_type =~ m#^text/#) {
+              <li>
+                <a class="btn btn-small" href="<%= url_for("$user_id_project_path/blame/$rev/$file") %>">Blame</a>
+              </li>
+            % }
+            <li>
+              <a class="btn btn-small" href="<%= url_for("$user_id_project_path/commits/$rev/$file") %>">History</a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    % if ($mime_type =~ m#^image/#) {
+      <div class="blob-image">
+        <img type="<%= $mime_type %>
+          % if (defined $file) {
+            alt="<%= $file %>" title="<%= $file %>"
+          % }
+          src="<%= url_for("$user_id_project_path/raw/$rev/$file") %>"
+        />
+      </div>
+    % } elsif ($mime_type =~ m#^text/#) {
+      % if ($file =~ /\.md$/) {
+        <%
+          my $readme = join "\n", @$lines;
+          $readme =~ s#^(\[.*\]:)(?!\s*https?://)\s*(\S*)#{"$1 " . url_for("$user_id_project_path/raw/$rev/$2")}#mge;
+          $readme =~ s#^(!\[.*\]\()(?!https?://)(\S*)#{$1 . url_for("$user_id_project_path/raw/$rev/$2")}#mge;
+          my $readme_e = $api->markdown($readme);
+        %>
+        <div class="readme-frame">
+          <div class="markdown-body">
+            <%== $readme_e %>
+          </div>
+        </div>
+      % } else {
+        <pre class="prettyprint linenums"><% for my $line (@$lines) { %><%= "$line\n" %><% } %></pre>
+      % }
+    % } else {
+      <div class="blob-raw">
+        <a href="<%= url_for("$user_id_project_path/raw/$rev/$file") %>">View raw</a>
+      </div>
+    % }
+  </div>
+  
+  %= javascript '/js/google-code-prettify/prettify.js';
+  %= javascript begin
+    // Google prety print
+    prettyPrint();
+  % end
+  
+  %= include '/include/footer';

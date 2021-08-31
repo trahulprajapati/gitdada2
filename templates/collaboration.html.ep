@@ -1,0 +1,249 @@
+<%
+  # API
+  my $api = gitprep_api;
+  my $manager = app->manager;
+
+  # Parameters
+  my $op = param('op') || '';
+  my $user_id = param('user') || '';
+  my $project_id = param('project');
+  
+  # Authentication
+  unless ($api->logined($user_id)) {
+    $self->redirect_to('/');
+    return;
+  }
+  
+  my $project_row_id = app->dbi->model('project')->select(
+    'project.row_id',
+    where => {'user.id' => $user_id, 'project.id' => $project_id}
+  )->value;
+  
+  # Rename project
+  my $git = app->git;
+  my $errors;
+  if (lc $self->req->method eq 'post') {
+    if ($op eq 'add') {
+      my $collaborator_id = param('collaborator');
+      
+      # Validator
+      my $vc = app->vc;
+      
+      # Validation result
+      my $validation = $vc->validation;
+      
+      # collaborator check
+      if (!length $collaborator_id) {
+        $validation->add_failed(collaborator => "collaborator is empty");
+      }
+      elsif ($collaborator_id eq $user_id) {
+        $validation->add_failed(collaborator => "User $collaborator_id is yourself");
+      }
+      else {
+        my $row = app->dbi->model('user')->select(
+          where => {id => $collaborator_id}
+        )->one;
+        if (!$row) {
+          $validation->add_failed(collaborator => "User $collaborator_id don't exists");
+        }
+        else {
+          my $row = app->dbi->model('collaboration')->select(
+            where => {project => $project_row_id, 'user.id' => $collaborator_id}
+          )->one;
+          if ($row) {
+            $validation->add_failed(collaborator => "Collaborator $collaborator_id already exists");
+          }
+        }
+      }
+      
+      if ($validation->is_valid) {
+        
+        my $collaborator_row_id = $api->get_user_row_id($collaborator_id);
+        
+        # Insert
+        eval {
+          app->dbi->model('collaboration')->insert(
+            {
+              project => $project_row_id,
+              user => $collaborator_row_id
+            }
+          );
+        };
+        # Code to verify email address
+        # eval {
+          use strict;
+          use warnings;
+
+          use Email::Sender::Simple qw(sendmail);
+          use Email::Sender::Transport::SMTP ();
+          use Email::Sender::Transport::SMTP::TLS;
+          use Email::Sender::Transport::SMTPS;
+          use Email::Simple ();
+          use Email::Simple::Creator ();
+          use Try::Tiny;
+
+           my $transport = Email::Sender::Transport::SMTP->new(
+            {
+              host => 'mail.gomailex.com',
+              port => 25,
+              sasl_username => 'gitdada@gomailex.com',
+              sasl_password => 'Gulf@123',
+              debug => 1,
+            }
+          );
+
+          my $collaborator_details = app->dbi->model('user')->select(
+            where => {id => $collaborator_id}
+          )->one;
+          my $collaborator_email = $collaborator_details->{email};
+
+          my $verification_email = Email::Simple->create(
+            header => [
+              To      => $collaborator_email,
+              From    => '"Gitdada Support" <gitdada@gomailex.com>',
+              Subject => "GitDada Collaboration",
+            ],          
+            body => "You have been added as a collaborator to a $project_id repository",
+          );
+          $verification_email->header_set( 'X-Content-Container' => 'bottle/glass' );
+  
+          # print $email->as_string;
+          try {
+            sendmail($verification_email, {transport => $transport});
+          } catch {
+              die "Error sending email: $_";
+          };
+          # sendmail($verification_email);
+        # };
+        if (my $e = $@) {
+          app->log->error(url_with . ": $e");
+          $errors = ['Internal Error'];
+        }
+        else {
+          flash(message => "Collaborator $collaborator_id is added.");
+          $self->redirect_to('current');
+          return;
+        }
+      }
+      else {
+        $errors = $validation->messages;
+      }
+    }
+    elsif ($op eq 'remove') {
+      my $collaborator_id = param('collaborator');
+      
+      my $collaborator_row_id = $api->get_user_row_id($collaborator_id);
+      
+      # Delete
+      eval {
+        app->dbi->model('collaboration')->delete(
+          where => {
+            project => $project_row_id,
+            user => $collaborator_row_id
+          }
+        );
+      };
+      if (my $e = $@) {
+        app->log->error(url_with . ": $e");
+        $errors = ['Internal Error'];
+      }
+      else {
+        flash(message => "Collaborator $collaborator_id is removed.");
+        $self->redirect_to('current');
+        return;
+      }
+    }
+  }
+  
+  my $collaborators = app->dbi->model('collaboration')->select(
+    {user => ['id']},
+    where => {project => $project_row_id},
+    append => 'order by collaboration.user'
+  )->all;
+%>
+
+% layout 'common', title => 'Collaboration';
+<script src="https://cdnjs.cloudflare.com/ajax/libs/corejs-typeahead/1.2.1/bloodhound.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/corejs-typeahead/1.2.1/typeahead.jquery.min.js"></script>
+<script type="text/javascript">
+// Return users to be added as collaborators
+  $(document).ready(function () {    
+    // Constructing the suggestion engine
+    var cars = new Bloodhound({
+        datumTokenizer: Bloodhound.tokenizers.obj.whitespace('id'),
+        queryTokenizer: Bloodhound.tokenizers.whitespace,
+        prefetch: {
+          url:'/getUsers',
+        },
+    });
+
+    // console.log(cars);
+
+    // Initializing the typeahead
+    $('.typeahead').typeahead({
+        hint: true,
+        highlight: true, /* Enable substring highlighting */
+        minLength: 1 /* Specify minimum characters required for showing result */
+    },
+    {
+        name: 'cars',
+        source: cars,
+        display: function(item) {        // display: 'name' will also work
+            return item.id;
+        },
+        limit: 5,
+        templates: {
+            suggestion: function(item) {
+                return '<div>'+ item.id +'</div>';
+            }
+        }
+    });
+  });
+  </script>
+  
+  %= include '/include/header';
+  
+  <div class="container">
+    %= include '/include/errors', errors => $errors;
+    %= include '/include/message', message => flash('message');
+    
+    <div class="project-settings">
+      <div class="left">
+        <ul>
+          <li><a href="<%= url_for("/$user_id/$project_id/settings") %>">Options</a></li>
+          <li><b>Collaborators</b></li>
+        </ul>
+      </div>
+      <div class="right">
+        <div class="collaboration">
+          <div>Manage Collaborators</div>
+            % if (@$collaborators) {
+              <table>
+                % for my $collaborator (@$collaborators) {
+                  <tr>
+                    <td>
+                      <a href="<%= url_for("/$collaborator->{'user.id'}") %>"><%= $collaborator->{'user.id'} %></a>
+                      <form action="<%= url_for->query(op => 'remove') %>" method="post" style="display:inline-block">
+                        <%= hidden_field 'collaborator' => $collaborator->{'user.id'} %>
+                        (<a href="javascript:void(0)" onclick="$(this).closest('form').submit();" style="color:red">remove</a>)
+                      </form>
+                    </td>
+                  </tr>
+                % }
+              </table>
+            % }
+            <form action="<%= url_for->query(op => 'add') %>" method="post">
+              <div>
+                  <input type="text" name="collaborator" class="typeahead tt-query" autocomplete="off" style="width: 100%">
+              </div>
+              <div>
+                  <button type="submit" class="btn" style="margin-top: 50px">Add</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  %= include '/include/footer';

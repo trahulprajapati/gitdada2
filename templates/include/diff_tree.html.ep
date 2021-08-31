@@ -1,0 +1,54 @@
+<%
+  my $rev = stash('rev');
+  my $from_rev = stash('from_rev');
+%>
+  
+<table style="margin-bottom:10px;width:100%">
+  
+  % my $toggle = 0;
+  % my $num = 0;
+  % for my $diff_tree (@$diff_trees) {
+    <tr style="<%= $num + 1 ne @$diff_trees ? 'border-bottom:1px #ddd solid' : '' %>">
+      <%
+        my $status = $diff_tree->{status};
+        my $file = $diff_tree->{to_file};
+        my $file_type = $diff_tree->{to_file_type};
+        my $mode = $diff_tree->{to_mode};
+        my $mode_str = $diff_tree->{to_mode_str};
+        my $mode_oct = $diff_tree->{to_mode_oct};
+        my $from_file = $diff_tree->{from_file};
+        my $from_mode_str = $diff_tree->{from_mode_str};
+      %>
+      <td style="padding:0 5px 0 0; width:12px;">
+        % if ($status eq 'A') {
+          <div class="file-add" title="added">+</div>
+        % } elsif ($status eq 'D') {
+          <div class="file-del" title="deleted">-</div>
+        % } elsif ($status eq 'M' || $status eq 'T') {
+          <div class="file-modified" title="modified">●</div>
+        % } elsif ($status eq 'R') {
+          <div class="file-renamed" title="renamed">▶</div>
+        % } elsif ($status eq 'C') {
+          <div class="file-copied" title="copied">→</div>
+        % }
+      </td>
+      <td>
+        % if ($status eq 'A' || $status eq 'M' || $status eq 'D') {
+          <a style="margin-left:5px" href="#<%= "diff-$num" %>"><%= $file %></a>
+        % } elsif ($status eq 'T') {
+          
+        % } elsif ($status eq 'R' || $status eq 'C') {
+          
+          <a href="#<%= "diff-$num" %>"><%= $diff_tree->{from_file} %> → <%= $file %></a>
+        % }
+        % if ($status ne 'A' && $status ne 'D' && $from_mode_str ne $mode_str) {
+          <%= "100$from_mode_str → 100$mode_str" %>
+        % }
+      </td>
+      <td style="text-align:right">
+        %= include '/include/diff_status_bar', diff_tree => $diff_tree, fragment => "diff-$num";
+      </td>
+    </tr>
+    % $num++;
+  % }
+</table>

@@ -1,0 +1,50 @@
+#!/bin/bash
+while read oldrev newrev ref
+do
+    if [[ $ref =~ .*/master5.026001]];
+    then
+        echo "Master ref received.  Deploying master branch to production..."
+
+        git --work-tree=/home/pronoor/gitprep/tmp/trahulprajapati/w1 --git-dir=/home/pronoor/gitprep/data/rep/trahulprajapati/w1.git checkout -f
+        status=$?
+        if [ $status -eq 1 ]; then
+      echo "Something went wrong. Exiting...";
+      exit 1
+    fi
+    
+    #Coping repo to target
+    echo "Coping repo to target"
+    scp -r /home/pronoor/gitprep/tmp/trahulprajapati/w1 pronoor@148.59.34.110:/home/pronoor/gitdada/w1
+    st0=$?
+    if [ $st0 -eq 1 ]; then
+        echo "Error whie coping repo to target. Exiting.."
+        exit
+    fi
+
+    #moving repo to /var/www/html
+    echo "moving repo to /var/www/html"
+    ssh pronoor@148.59.34.110 "echo pronoor123 | sudo -S cp -r /home/pronoor/gitdada/w1 /var/www/html"
+    st01=$?
+    if [ $st01 -eq 1 ]; then
+      ssh pronoor@148.59.34.110 "rm -rf /home/pronoor/gitdada/w1"
+        echo "Error while copy repo to public dir. Exiting.."
+        exit 1
+    fi
+
+
+    #Restarting server
+    echo "Restarting server"
+    ssh pronoor@148.59.34.110 "echo pronoor123| sudo -S sudo service apache2 restart"
+    st5=$?
+    if [ $st5 -eq 1 ]; then
+      echo "Unable to restart server. Exiting..."
+      exit 1
+    fi
+
+    echo "Deployed Successfully"
+
+  fi
+    else
+        echo "Ref $ref successfully received.  Doing nothing: only the master branch may be deployed on this server."
+    fi
+done

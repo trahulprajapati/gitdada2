@@ -1,0 +1,134 @@
+  <%
+  my $api = gitprep_api;
+  
+  my $op = param('op') || '';
+  my $email; 
+  my $jwt = param('jwt');
+  my $errors;
+  my $successMessage;
+
+  #get email id
+  if ($jwt) {
+    use Mojo::JWT;
+    use Crypt::JWT qw(decode_jwt);
+    $email = decode_jwt(token => $jwt, key => 'pwds3cr3t');
+  }
+  if ($op eq 'reset_password') {
+  
+    # Parameters
+    my $password = param('password'); #represents username
+    my $password2 = param('password2');
+    my $email = param('email');
+    # Validator
+    my $vc = app->vc;
+    
+    # Validation result
+    my $validation = $vc->validation;
+
+     # "password" check
+    if (!(defined $password && length $password)) {
+      $validation->add_failed(password => 'Password is empty.');
+    }elsif (!$vc->check($password, 'ascii_graphic')) {
+      $validation->add_failed(password => 'Password contain invalid character.');
+    } elsif ($password ne $password2) {
+      $validation->add_failed(password => "Two password don't match");
+    }
+    
+    #is_valid
+    if ($validation->is_valid) {
+      
+      # Encrypt password
+      my ($password_encrypted, $salt) = $api->encrypt_password($password);
+      #Create user
+      my $ret;
+      eval {
+        $ret = app->dbi->model('user')->update(
+          {
+            password => $password_encrypted,
+            salt => $salt
+          }, 
+          where => {email => $email}
+        );
+      };
+      if (my $e = $@) {
+        app->log->error(url_for . ": $e");
+        $errors = ['Internal Error'];
+      }
+      else {
+        if (!$ret) {
+          $errors = "Password reset failed, Something went wrong.";
+        } else {
+          $successMessage = "Password Reset Successfully!";
+          sleep 3;
+          $self->redirect_to("/");
+        }
+      }
+    }
+    else { 
+      my $error_arr = $validation->{'_failed_infos'};
+      my $message;
+      if ($error_arr) {
+        for (keys %$error_arr) {
+          next if (!$_);
+          my $msg_ref = $error_arr->{$_};
+          my $msg = $msg_ref->{'message'};
+          $message .= "$msg\n" if ($msg);
+        }
+      }
+      chomp $message;
+      $errors = $message;
+    }
+  }
+%>
+
+%= javascript '/js/icon-input.js';
+
+% layout 'frontcommon', title => 'Reset Password';
+  %= include '/include/fheader';
+  <div class="content content-fixed content-auth">
+    <div class="container">
+      <div class="media align-items-stretch justify-content-center ht-100p pos-relative">
+        <div class="media-body align-items-center d-none d-lg-flex">
+          <div class="mx-wd-600">
+            <img src="image/signup-banner.png" class="img-fluid" alt="" />
+          </div>
+          <!-- div class="pos-absolute b-0 l-0 tx-12 tx-center">
+            Workspace design vector is created by <a href="#" target="_blank">Bangladesh Software Professionm (bdsoftpro.com)</a>
+          </div> -->
+        </div><!-- media-body -->
+        <div class="sign-wrapper mg-lg-l-50 mg-xl-l-60">
+          <div class="wd-100p">
+            <h4 class="tx-color-01 mg-b-5">Enter New Password</h4>
+             <p style="color: red">
+                <% if($errors){ %>
+                <%= $errors %>
+                <% } %>
+              </p>
+              <p style="color: green">
+                <% if($successMessage){ %>
+                <%= $successMessage %>
+                <% } %>
+              </p>
+            <form action="<%= url_for->query(op => 'reset_password') %>" method="post">
+               <div class="form-group">
+                <div class="d-flex justify-content-between mg-b-5">
+                  <label class="mg-b-0-f">New Password</label>
+                </div>
+                <input type="password" name="password" class="form-control" placeholder="Enter your password" required>
+                <input type="text" name="email" value="<%= $email %>" hidden=true>
+              </div>
+              <div class="form-group">
+                <div class="d-flex justify-content-between mg-b-5">
+                  <label class="mg-b-0-f">Re-enter Password</label>
+                </div>
+                <input type="password" name="password2" class="form-control" placeholder="Enter your password" required>
+              </div>
+              
+              <button type="submit" id="sbmt" class="btn btn-brand-02 btn-block">Reset Password</button>
+            </form>
+          </div>
+        </div><!-- sign-wrapper -->
+      </div><!-- media -->
+    </div><!-- container -->
+  </div><!-- content -->
+  %= include '/include/ffooter';

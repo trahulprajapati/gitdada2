@@ -1,0 +1,207 @@
+<%
+  # API
+  my $api = gitprep_api;
+
+  # Git
+  my $git = $self->app->git;
+
+  # Parameters
+  my $user_id = param('user');
+  my $project_id = param('project');
+  my $rev_file = param('rev_file');
+
+  my $is_wiki = (stash('tab') // '') eq 'wiki';
+  
+  my $user_project_path = "/$user_id/$project_id";
+  if ($is_wiki) {
+    $user_project_path .= '/wiki';
+  }
+  
+  my $render_atom_feed = $rev_file =~ s/\.atom$// ? 1 : 0;
+  my $rep_info = $is_wiki ? app->wiki_rep_info($user_id, $project_id) : app->rep_info($user_id, $project_id);
+  
+  my ($rev, $file) = $git->parse_rev_path($rep_info, $rev_file);
+  my $page = param('page') || 0;
+  
+  # Latest commit
+  my $latest_commit = $git->get_commit($rep_info, $rev);
+
+  # Authors
+  my %author_id_of = map { $_->{email} => $_->{id} }
+    @{ app->dbi->model('user')->select( [ 'id', 'email' ] )->all };
+    
+  # Commits
+  my $page_count = 30;
+  my $commits = $git->get_commits(
+    $rep_info,
+    $latest_commit->{id},
+    $page_count,
+    $page_count * $page,
+    $file
+  );
+  my $commits_count = @$commits;
+  my $commits_date = {};
+  for my $commit (@$commits) {
+    my $date = $commit->{age_string_date_local};
+    $commits_date->{$date} ||= [];
+    push @{$commits_date->{$date}}, $commit;
+  }
+  
+  # Global variable
+  stash(user => $user_id, project => $project_id, rev => $rev);
+  
+  # Render atom xml feed
+  if ($render_atom_feed) {
+    # Add updated date time
+    for my $commit (@$commits) {
+      my $committer_epoch = $commit->{committer_epoch};
+      my $committer_tz = $commit->{committer_tz};
+      
+      my $time_zone_second;
+      my $time_zone;
+      if ($committer_tz =~ /^(\+|\-)([0-9]{2})([0-9]{2})$/) {
+        my $time_zone_sign = $1;
+        my $time_zone_hour = $2;
+        my $time_zone_min = $3;
+        $time_zone_second = $time_zone_sign . ($time_zone_hour * (60 * 60) + $time_zone_min * 60);
+        $time_zone = sprintf("$time_zone_sign%02d:%02d", $time_zone_hour, $time_zone_min);
+      }
+
+      # updated datetime
+      my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday) = gmtime($committer_epoch + $time_zone_second);
+      my $updated = sprintf('%4d-%02d-%02dT%02d:%02d:%02d', 1900 + $year, $mon + 1, $mday, $hour, $min, $sec);
+      $updated .= $time_zone;
+      
+      $commit->{updated} = $updated;
+    }
+  }
+  
+  # Set stash
+  stash(
+    user => $user_id,
+    project => $project_id,
+    rev => $rev
+  );
+#%>
+% if ($render_atom_feed) {
+<%
+    $self->res->headers->content_type('application/atom+xml;charset=UTF-8');
+    # Create atom feed
+    my $alternate_url = url_with;
+    my $alternate_url_path_parts = $alternate_url->path->parts;
+    $alternate_url_path_parts->[-1] =~ s/\.atom$//;
+#%>
+<?xml version="1.0" encoding="UTF-8" ?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xml:lang="en-US">
+  <id>tag:gitprep,2008:/<%= $user_id %>/<%= $project_id %>/commits/<%= $rev_file %></id>
+  <link type="text/html" rel="alternate" href="<%= $alternate_url->to_abs %>"/>
+  <link type="application/atom+xml" rel="self" href="<%= url_with->to_abs %>"/>
+  <title>Recent Commits to <%= "$project_id:$rev" %></title>
+  <updated><%= $commits->[0]->{updated} %></updated>
+
+    % for my $commit (@$commits) {
+  <entry>
+    <id>tag:gitprep,2008:Grit::Commit/<%= $commit->{id} %></id>
+    <link type="text/html" rel="alternate" href="<%= url_for("$user_project_path/commit/$commit->{id}")->to_abs %>" />
+    <title>
+        <%= $commit->{title} %>
+    </title>
+    <updated><%= $commit->{updated} %></updated>
+    <author>
+      <name><%= $user_id %></name>
+      <uri><%= url_for("/$user_id")->to_abs %></uri>
+    </author>
+    <content type="html">
+      <%= "<pre style='white-space:pre-wrap;width:81ex'>$commit->{title}</pre>" %>
+    </content>
+  </entry>
+    % }
+</feed>
+% } else {
+  % layout 'common', title => "Commit History \x{30fb} $user_id/$project_id";
+    
+    %= include '/include/header';
+
+    <div class="container">
+      % unless ($is_wiki) {
+        <div>
+          %= include '/include/branch_select', display => 'commits';
+        </div>
+      % }
+      
+      <div class="commits">
+        % for my $date (reverse sort keys %$commits_date) {
+          % my $commits = $commits_date->{$date};
+          <div class="commit-date">
+            <i class="icon-off"></i><span>Commits on <%= $date %></span>
+          </div>
+
+          <ul class="commits-date-container">
+            % my $num = 0;
+            % for my $commit (sort {$b->{author_epoch} <=> $a->{author_epoch}} @$commits) {
+              <%
+                my $author_id = app->dbi->model('user')->select('id', where => {email => $commit->{author_email}})->value;              %>
+              <li>
+                <div class="commit-left">
+                  <div class="commit-left-title">
+                    <a href="<%= url_for("$user_project_path/commit/$commit->{id}") %>">
+                      <b><%= $commit->{title_short} %></b>
+                    </a>
+                  </div>
+                  <div class="commit-left-author">
+                    <span title="<%= $commit->{author_email} %>">
+                    
+                      % if (defined $author_id) {
+                        <a href="<%= url_for("/$author_id") %>"><%= $author_id %></a>
+                      % } else {
+                        <%= $commit->{author_name} %>
+                      % }
+                    </span>
+                    <span class="muted" title="<%= $commit->{age_string_datetime_local} %>"><%= $commit->{age_string} %></span>
+                  </div>
+                </div>
+                <div class="commit-right">
+                  <div class="commit-right-container">
+                    <div class="commit-right-commit-id">
+                      <a href="<%= url_for("$user_project_path/commit/$commit->{id}") %>">
+                        <%= substr($commit->{id}, 0, 7) %>
+                      </a>
+                    </div>
+                    <div class="commit-right-browse-repository">
+                      <a title="Browse the repository at this point in the history" href="<%= url_for("$user_project_path/commit/$commit->{id}") %>">
+                        &lt;&gt;
+                      </a>
+                    </div>
+                  </div>
+                </div>
+                % $num++;
+              </li>
+            % }
+          </ul>
+        % }
+      </div>
+      
+      <div class="pagenation-container">
+        <ul class="pagenation">
+          % if ($page == 0) {
+            <li><span>Newer</span></li>
+          % } else {
+            % my $newer_page = $page - 1;
+            <li>
+              <a href="<%= url_for("$user_project_path/commits/$rev?page=$newer_page") %>">Newer</a>
+            </li>
+          % }
+          % if ($commits_count < $page_count) {
+            <li><span>Older</span></li>
+          % } else {
+            % my $older_page = $page + 1;
+            <li>
+              <a href="<%= url_for("$user_project_path/commits/$rev?page=$older_page") %>">Older</a>
+            </li>
+          % }
+        </ul>
+      </div>
+    </div>
+    
+    %= include '/include/footer';
+% }

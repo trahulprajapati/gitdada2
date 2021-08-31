@@ -1,0 +1,53 @@
+<%
+  my $path = param('Path');
+  my $user = param('user');
+  my $project = param('project');
+
+  # Protect directory traversal
+  if ($path =~ m#\.\.#) {
+    $self->reply->exception('Invalid URL');
+    return;
+  }
+
+  # Content type
+  my $content_type;
+  if ($path eq 'HEAD'
+    || $path eq 'objects/info/alternates'
+    || $path eq 'objects/info/http-alternates'
+  )
+  {
+    $content_type = 'text/plain';
+  }
+  elsif ($path eq 'objects/info/packs') {
+    $content_type = 'text/plain; charset=UTF-8';
+  }
+  elsif ($path =~ m#^objects/[0-9a-f]{2}/[0-9a-f]{38}$#) {
+    $content_type = 'application/x-git-loose-object';
+  }
+  elsif ($path =~ m#^objects/pack/pack-[0-9a-f]{40}\.pack$#) {
+    $content_type = 'application/x-git-packed-objects';
+  }
+  elsif ($path =~ m#^objects/pack/pack-[0-9a-f]{40}\.idx$#) {
+    $content_type = 'application/x-git-packed-objects-toc';
+  }
+  
+  my $rep_info = app->rep_info($user, $project);
+  my $rep_git_dir = $rep_info->{git_dir};
+  my $file = "$rep_git_dir/$path";
+  if (-f $file) {
+    my $asset = Mojo::Asset::File->new(path => $file);
+    my $content = $asset->slurp;
+    $content = '' unless defined $content;
+    $self->res->headers->content_type($content_type);
+    $self->res->headers->content_length(length $content);
+    $self->res->body($content);
+    $self->res->code(200);
+    $self->rendered;
+    return;
+  }
+  else {
+    $self->res->code(404);
+    $self->rendered;
+    return;
+  }
+%>

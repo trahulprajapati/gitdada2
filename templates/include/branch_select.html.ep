@@ -1,0 +1,197 @@
+<%
+  my $api = gitprep_api;
+  
+  my $user = param('user');
+  my $project = param('project');
+  my $display = stash('display') || '';
+  my $rev = stash('rev');
+  $rev = '' unless defined $rev;
+  my $branches = stash('branches');
+  my $ssh_rep_url = stash('ssh_rep_url');
+
+  my $logined = $api->logined;
+
+  my $type
+    = $display eq 'tree' || $display eq 'tree_top' || $display eq 'blob'
+    ? 'tree' : 'commits';
+  
+  my $path = stash('Path');
+
+  my $title;
+  my $rev_short;
+  if (defined $rev && length $rev == 40) {
+    $title = 'Tree';
+    $rev_short = substr($rev, 0, 10);
+  }
+  else {
+    $title = 'Branch';
+    $rev_short = $rev;
+  }
+  
+%>
+
+%= javascript begin
+  $(document).ready(function () {
+  
+    // Switch branches and tags
+    var revs_init = false;
+    $('#rev-btn').on('click', function () {
+      
+      if (!revs_init) {
+        $.get('<%= url_for("/$user/$project/api/revs") %>', function (result) {
+          var branch_names = result.branch_names;
+          var tag_names = result.tag_names;
+          var style = 'style="border-top-left-radius:0px;border-top-right-radius:0px;"';
+          
+          if (branch_names.length === 0) {
+            $('#branch-names-list').append(
+              '<li><a ' + style + ' href="#">No branches</a></li>'
+            );
+          }
+          else {
+            for (var i = 0; i < branch_names.length; i++) {
+              var branch_name = branch_names[i];
+              $('#branch-names-list').append(
+                '<li><a ' + style + ' href="<%= url_for("/$user/$project/$type/") %>' + branch_name + '">' + branch_name + '</a></li>'
+              );
+            }
+          }
+          
+          if (tag_names.length === 0) {
+            $('#tag-names-list').append(
+              '<li><a ' + style + ' href="#">No tags</a></li>'
+            );
+          }
+          else {
+            for (var i = 0; i < tag_names.length; i++) {
+              var tag_name = tag_names[i];
+              $('#tag-names-list').append(
+                '<li><a ' + style + ' href="<%= url_for("/$user/$project/$type/") %>' + tag_name + '">' + tag_name + '</a></li>'
+              );
+            }
+          }
+          $('#rev-popup')
+            .css('display', 'block')
+            .css('top', '5px')
+            .css('left', '0px')
+          ;
+        });
+        revs_init = true;
+      }
+      else {
+        $('#rev-popup')
+          .css('display', 'block')
+          .css('top', '5px')
+          .css('left', '0px')
+        ;
+      }
+    });
+
+    $('#revs-tab a').click(function (e) {
+      e.preventDefault();
+      $(this).tab('show');
+    })
+    
+    $('#rev-close').on('click', function () {
+      $('#rev-popup').css('display', 'none');
+    });
+    
+    
+    // Repository URL buttons
+    var http_url = '<%= url_for("$user/$project.git")->to_abs %>';
+    var http_rep_url = http_url.replace("localhost:10020", "gitdada.com");
+    
+    var logined = <%= $logined ? 'true' : 'false' %>;
+    var ssh_url = '<%= $ssh_rep_url %>';
+    var ssh_rep_url = ssh_url.replace("localhost", "gitdada.com:");
+    
+    // Click HTTP button
+    $('#btn_http').on('click', function () {
+      $('#rep_url').val(http_rep_url);
+      $('#btn_http').addClass('btn-info');
+      $('#btn_ssh').removeClass('btn-info');
+    });
+
+    // Click SSH button
+    $('#btn_ssh').on('click', function () {
+      $('#rep_url').val(ssh_rep_url);
+      $('#btn_http').removeClass('btn-info');
+      $('#btn_ssh').addClass('btn-info');
+    });
+
+    // Initialize
+    if (logined) {
+      $('#btn_ssh').trigger('click');
+    }
+    else {
+      $('#btn_http').trigger('click');
+    }
+  });
+% end
+
+<div class="branch-select-container">
+  <div class="branch-select-left-container <%= $display eq 'tree' || $display eq 'blob' ? 'branch-select-left-container-page-path' : '' %>">
+    <button id="rev-btn" class="btn" style="padding-top:6px">
+      <span><%= $title %>:</span> <b><%= $rev_short %></b> <i class="icon-arrow-down" style="position: relative;top:-1px;left:2px;"></i>
+    </button>
+    % if ($display eq 'tree' || $display eq 'blob') {
+        %= include '/include/page_path', Path => $path;
+    % }
+  </div>
+    % if ($display eq 'tree_top') {
+      <div class="branch-select-right-container">
+        <ul class="git-url-container">
+          % if ($logined) {
+            <li>
+              <button class="btn btn-info" id="btn_ssh">SSH</button>
+            </li>
+          % }
+          <li>
+            <button class="btn <%= !$logined ? 'btn-info' : '' %>" id="btn_http"><%= $self->req->is_secure ? 'HTTPS' : 'HTTP' %></button>
+          </li>
+          <li>
+            <input id="rep_url" type="text">
+          </li>
+          <li>
+            <div class="donwload-zip">
+              <a title="Download ZIP" class="btn" href="<%= url_for("/$user/$project/archive/$rev.zip") %>">
+                ZIP
+              </a>
+              <a title="Download tar.gz" class="btn" href="<%= url_for("/$user/$project/archive/$rev.tar.gz") %>">
+                tar.gz
+              </a>
+            </div>
+          </li>
+        </ul>
+      </div>
+    % }
+</div>
+
+<div style="position:relative">
+  <div id="rev-popup" style="display:none;width:330px;position:absolute">
+    <div class="radius-top border-gray" style="background:#E6E6FA;padding:10px">
+      <div style="overflow:hidden">
+        <div style="float:left;width:90%">
+          <b>Switch branches/tags</b>
+        </div>
+        <div style="width:10%;float:right;text-align:right">
+          <i id="rev-close" class="icon-remove-circle"></i>
+        </div>
+      </div>
+    </div>
+    <ul class="nav nav-tabs" id="revs-tab" style="background:#F5F5F5;margin-bottom:0">
+      <li class="active"><a href="#branches">Branches</a></li>
+      <li><a href="#tags">Tags</a></li>
+    </ul>
+    <div class="tab-content">
+      <div class="tab-pane active" id="branches" style="background:white;max-height:300px;overflow:auto;margin-top:0">
+        <ul id="branch-names-list" class="nav nav-tabs nav-stacked">
+        </ul>
+      </div>
+      <div class="tab-pane" id="tags" style="background:white;max-height:300px;overflow:auto;margin-top:0">
+        <ul id="tag-names-list" class="nav nav-tabs nav-stacked">
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>

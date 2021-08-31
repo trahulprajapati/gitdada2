@@ -1,0 +1,207 @@
+<%
+  my $state;
+
+  # API
+  my $api = gitprep_api;
+
+  # Git
+  my $git = app->git;
+  
+  # Parameters
+  my $user_id = param('user');
+  my $project_id = param('project');
+  
+  my $project_row_id = $api->get_project_row_id($user_id, $project_id);
+  
+  my $rev;
+  my $dir;
+  my $rev_dir = param('rev_dir');
+  if (defined $rev_dir) {
+    ($rev, $dir) = $git->parse_rev_path(app->rep_info($user_id, $project_id), $rev_dir);
+  }
+  else {
+    $rev = app->manager->default_branch($user_id, $project_id);
+  }
+  
+  unless (app->manager->exists_project($user_id, $project_id)) {
+    $self->reply->not_found;
+    return;
+  }
+
+  # Repository description
+  my $desc = $git->description(app->rep_info($user_id, $project_id));
+  my $website_url = app->dbi->model('project')->select('website_url', where => {row_id => $project_row_id})->value;
+  # Check exsitence
+  my $commits_number;
+  if ($git->exists_branch(app->rep_info($user_id, $project_id))) {
+    # Commit
+    my $commit = $git->get_commit(app->rep_info($user_id, $project_id), $rev);
+    
+    # Tree
+    my $trees;
+    if (defined $dir && length $dir) {
+      $trees = $git->trees(app->rep_info($user_id, $project_id), $rev, $dir);
+    }
+    else {
+      $trees = $git->trees(app->rep_info($user_id, $project_id), $rev);
+    }
+    # Commits number
+    $commits_number = $git->commits_number(app->rep_info($user_id, $project_id), $rev);
+    
+    # Variable for included template
+    stash(
+      commit => $commit,
+      trees => $trees,
+      rev => $rev,
+      title => "$user_id/$project_id",
+    );
+    
+    $state = 'display';
+  }
+  else { $state = 'init' }
+  
+  my $is_project_top_page = !(defined $dir && length $dir);
+
+  my $url = url_for->to_abs;
+  $url->base(undef);
+  my $ssh_port = config->{basic}{ssh_port};
+  my $rep_home = app->rep_home;
+  my $execute_user = getpwuid($>);
+  my $ssh_rep_url_base = defined app->config->{basic}{'ssh_rep_url_base'}
+    ? app->config->{basic}{'ssh_rep_url_base'} : $rep_home;
+  my $ssh_rep_url = "ssh://$execute_user\@" . $url->host
+    . ($ssh_port ? ":$ssh_port" : '') . "$ssh_rep_url_base/$user_id/$project_id.git";
+  $ssh_rep_url =~ s/localhost/gitdada.com/;
+  my $branches = stash('branches');
+  my $branches_count = app->git->branches_count($self->app->rep_info($user_id, $project_id));
+  my $default_branch_name = app->manager->default_branch($user_id, $project_id);
+  my $tags_count = app->git->tags_count(app->rep_info($user_id, $project_id));
+  
+  my $logined = $api->logined;
+  layout 'common', title => "$user_id/$project_id";
+%>
+  
+  %= include '/include/header';
+  
+  <div class="container">
+    %= include '/include/message', message => flash('message');
+    
+    % if ($is_project_top_page) {
+      <h3 class="tree-description">
+        <%= $desc %>
+        % if (defined $website_url && length $website_url) {
+          <a href="<%= $website_url %>">website</a>
+        % }
+      </h3>
+    % }
+    % if ($state eq 'display') {
+      % if ($is_project_top_page) {
+        <ul class="commits-count">
+          <li>
+            % my $commits_url = "/$user_id/$project_id/commits/" . ((defined $rev && length $rev) ? $rev : $default_branch_name);
+            <a href="<%= url_for($commits_url) %>">
+              <span class="commits-count-number">
+                <i class="icon-repeat" style="position:relative;top:-1px"></i>
+                <%= $commits_number %>
+              </span>
+              <span class="commits-count-type">
+                commits
+              </span>
+            </a>
+          </li>
+          <li>
+            <a href="<%= url_for("/$user_id/$project_id/branches") %>">
+              <span class="commits-count-number">
+                <i class="icon-indent-left" style="position:relative;top:-1px"></i>
+                <%= $branches_count %>
+              </span>
+              <span class="commits-count-type">
+                branches
+              </span>
+            </a>
+          </li>
+          <li>
+            <a href="<%= url_for("/$user_id/$project_id/tags") %>">
+              <span class="commits-count-number">
+                <i class="icon-tags" style="position:relative;top:-1px"></i>
+                <%= $tags_count %>
+              </span>
+              <span class="commits-count-type">
+                releases
+              </span>
+            </a>
+          </li>
+        </ul>
+      % }
+
+      <div style="margin-bottom:5px;">
+        % my $display = defined $dir && length $dir ? 'tree' : 'tree_top';
+        %= include '/include/branch_select', display => $display, Path => $dir, ssh_rep_url => $ssh_rep_url;
+      </div>
+      <div style="margin-bottom:30px">
+        %= include '/include/tree', dir => $dir;
+      </div>
+      
+      %= include '/include/readme', dir => $dir;
+      
+    % } elsif ($state eq 'init' && $api->logined($user_id)) {
+      <h4 class="topic1">SSH</h4>
+      
+      <div class="text-center" style="margin-bottom:10px">
+        <b>Create a new repository on the command line via ssh</b>
+      </div>
+      
+      <pre class="command-line">
+git clone <%= $ssh_rep_url %>
+touch README
+git add README
+git commit -m "first commit"
+If files size is more than 10M, run - git config --local http.postBuffer 157286400
+git push origin master
+</pre>
+      
+      <div class="text-center" style="margin-bottom:10px">
+        <b>Push an existing repository from the command line via ssh</b>
+      </div>
+      
+      <pre class="command-line">
+git remote add origin <%= $ssh_rep_url %>
+If files size is more than 10M, run - git config --local http.postBuffer 157286400
+git push origin master
+</pre>
+
+      <hr>
+
+      % my $http_rep_url = url_for("$user_id/$project_id.git")->to_abs;
+      % $http_rep_url =~ s/localhost:10020/gitdada.com/ ;
+      <h4 class="topic1"><%= uc url_for->to_abs->scheme %></h4>
+
+      <div class="text-center" style="margin-bottom:10px">
+        <b>Create a new repository on the command line via <%= url_for->to_abs->scheme %></b>
+      </div>
+      
+      <pre class="command-line">
+git clone <%= $http_rep_url %>
+touch README
+git add README
+git commit -m "first commit"
+If files size is more than 10M, run - git config --local http.postBuffer 157286400
+git push origin master
+</pre>
+      
+      <div class="text-center" style="margin-bottom:10px">
+        <b>Push an existing repository from the command line via <%= url_for->to_abs->scheme %></b>
+      </div>
+      
+      <pre class="command-line">
+git remote add origin <%= $http_rep_url %>
+If files size is more than 10M, run - git config --local http.postBuffer 157286400
+git push origin master
+</pre>
+    % } else {
+      <div class="not-yet-created">
+        <b>Repository is not yet created.</b>
+      </div>
+    % }
+  </div>
+  %= include '/include/footer';

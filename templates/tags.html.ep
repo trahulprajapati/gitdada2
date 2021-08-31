@@ -1,0 +1,105 @@
+<%
+  # API
+  my $api = Gitprep::API->new($self);
+
+  # Parameters
+  my $user = param('user');
+  my $project = param('project');
+  my $page = param('page') || 1;
+  
+  # Git
+  my $git = $self->app->git;
+  
+  # Ref names
+  my $limit = app->config->{basic}{tags_limit};
+  my $page_count = 20;
+  my $tags = $git->tags(
+    app->rep_info($user, $project),
+    $limit,
+    $page_count,
+    $page_count * ($page - 1)
+  );
+  my $tags_count = $git->tags_count(app->rep_info($user, $project));
+%>
+
+% layout 'common', title => "Tags \x{30fb} $user/$project";
+  
+  %= include '/include/header';
+
+  <div class="container">
+    
+    <h3 class="topic1">Tags</h3>
+    
+    % if (@$tags) {
+      <ul class="tags">
+        % for (my $i = 0; $i < @$tags; $i++) {
+          % my $tag = $tags->[$i];
+          % my $name = $tag->{name};
+          % my $tag_class = $i == @$tags - 1 ? 'tag tag_last' : 'tag';
+          <li>
+            <ul class="tags-item">
+              <li>
+                <span title="<%= $tag->{commit}{age_string_datetime_local} %>">on <%= $tag->{commit}{age_string_date_local} %></span>
+              </li>
+              <li class="last-child">
+                <div class="tags-name">
+                  <a class="font-black" href="<%= url_for("/$user/$project/tree/$name") %>">
+                    <b><%= $name %></b>
+                    % if (defined $tag->{comment_short}) {
+                      - <span style="color:#333"><%= $tag->{comment_short} %></span>
+                    % }
+                  </a>
+                </div>
+                <div class="tags-links">
+                  % my $commit_id = $tag->{commit}{id};
+                  <a class="muted" href="<%= url_for("/$user/$project/commit/$commit_id") %>">
+                    <i class="icon-share-alt"></i>
+                    <%= substr($commit_id, 0, 7) %>
+                  </a>
+                  <a href="<%= url_for("/$user/$project/archive/$name.zip") %>">
+                    <i class="icon-file"></i>
+                    zip
+                  </a>
+                  <a href="<%= url_for("/$user/$project/archive/$name.tar.gz") %>">
+                    <i class="icon-file"></i>
+                    tar.gz
+                  </a>
+                </div>
+              </li>
+            </ul>
+          </li>
+        % }
+      </ul>
+
+      % if ($tags_count > $page_count) {
+        <div class="pagenation-container" style="margin-top:20px">
+          <ul class="pagenation">
+            % if ($page == 1) {
+              <li><span>Newer</span></li>
+            % } else {
+              % my $newer_page = $page - 1;
+              <li class="disable">
+                <a href="<%= url_for("/$user/$project/tags?page=$newer_page") %>">Newer</a>
+              </li>
+            % }
+            % if (@$tags < $page_count) {
+              <li><span>Older</span></li>
+            % } else {
+              % my $older_page = $page + 1;
+              <li>
+                <a href="<%= url_for("/$user/$project/tags?page=$older_page") %>">Older</a>
+              </li>
+            % }
+          </ul>
+        </div>
+      % }
+    % } else {
+      <ul class="tags">
+        <li>
+          No Tags.
+        </li>
+      </ul>
+    % }
+  </div>
+  
+  %= include '/include/footer';

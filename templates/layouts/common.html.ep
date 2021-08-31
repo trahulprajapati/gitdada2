@@ -1,0 +1,35 @@
+<%
+  my $stylesheets = stash('stylesheets') || [];
+  my $user = stash('user');
+  $user = '' unless defined $user;
+  my $project = stash('project');
+  $project = '' unless defined $project;
+  my $rev = stash('rev');
+  if (length $user && length $project && !defined $rev) {
+    $rev = app->manager->default_branch($user, $project);
+  }
+  $rev = '' unless $rev;
+%>
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="index, follow" >
+    % my $title = stash('title');
+    <title><%= $title ? "$title - GitDada" : 'GitDada' %></title>
+    %= stylesheet '/css/common.css', rel => 'stylesheet', media => 'screen';
+    % for my $stylesheet (@$stylesheets) {
+      %= stylesheet $stylesheet;
+    % }
+    %= javascript '/js/jquery-1.9.0.min.js';
+    %= javascript '/js/bootstrap.min.js';
+    
+    <link rel="shortcut icon" href="<%= url_for('/git-favicon.png') %>" type="image/png" >
+    % if (length $user && length $project && length $rev) {
+      <link href="<%= url_for("/$user/$project/commits/$rev.atom")->to_abs %>" rel="alternate" title="Recent Commits to <%= "$project:$rev" %>" type="application/atom+xml">
+    % }
+  </head>
+  <body>
+    %= content;
+  </body>
+</html>

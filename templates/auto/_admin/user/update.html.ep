@@ -1,0 +1,181 @@
+<%
+  my $api = gitprep_api;
+  
+  my $op = param('op') || '';
+  my $user_id = param('id');
+  
+  my $errors;
+  if (lc $self->req->method eq 'post') {
+    if ($op eq 'update') {
+    
+      # Parameters
+      my $id = param('id');
+      my $name = param('name');
+      my $email = param('email');
+      my $states = param('status');
+      my $unit = param('unit');
+      my $size = param('size');
+      
+      # Validator
+      my $vc = app->vc;
+      
+      # Validation result
+      my $validation = $vc->validation;
+      
+      # "id" check
+      if (!(defined $id && length $id)) {
+        $validation->add_failed(id => 'User id is empty.');
+      }
+      elsif (length $name > 300) {
+        $validation->add_failed(id => 'User id is too long.');
+      }
+      
+      # "name" check
+      $name //= '';
+      
+      # "email" check
+      if (!(defined $email && length $email)) {
+        $validation->add_failed(email => "Mail must be not empty");
+      }
+      elsif (length $email > 300) {
+        $validation->add_failed(email => "Mail is too long");
+      }
+      elsif ($email !~ /\@/) {
+        $validation->add_failed(email => "Invalid mail address");
+      }
+      else {
+        my $where = app->dbi->where;
+        my $clause = [
+          'and',
+          ':email{=}',
+          ':id{<>}'
+        ];
+        my $param = {
+          email => $email,
+          id => $user_id
+        };
+        $where->clause($clause);
+        $where->param($param);
+        
+        my $row = app->dbi->model('user')->select(where => $where)->one;
+        if ($row) {
+          $validation->add_failed(email => "Mail $email already exists");
+        }
+      }
+      
+      if ($validation->is_valid) {
+        
+        # Encrypt password
+        my $params = {};
+        $params->{name} = $name;
+        $params->{email} = $email;
+	$params->{status} = $states;
+	my $human = Number::Bytes::Human->new(bs => 1000, si => 1);
+	my $bytes = $human->parse($size.$unit);
+	$params->{maxsize} = $bytes;
+        
+        # Update user
+        eval { app->dbi->model('user')->update($params, where => {id => $id}) };
+        if (my $e = $@) {
+          app->log->error(url_for . ": $e");
+          $errors = ['Internal Error'];
+        }
+        else {
+          $self->flash(success => 1);
+          $self->flash(id => $id);
+          $self->redirect_to(url_for->query(id => $id));
+        }
+      }
+      else { $errors = $validation->messages }
+    }
+  }
+  
+  my $user = app->dbi->model('user')->select(
+    where => {id => $user_id, admin => 0}
+  )->one;
+%>
+
+% layout 'common', title => 'Update User';
+
+  %= include '/include/header';
+
+  <div class="container">
+    % my $id = '';
+    % if (flash('success')) {
+      <div class="alert alert-success">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        Success: User <b><%= flash('id') %></b> is updated.
+      </div>
+    % }
+    
+    % if ($errors) {
+      <div class="alert alert-error">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        % for my $error (@$errors) {
+          <p><%= $error %></p>
+        % }
+      </div>
+    % }
+    
+    <div class="topic1" style="text-align:center">Update User</div>
+    <form class="user-form" action="<%= url_for->query(id => $user_id) %>" method="post">
+      %= hidden_field op => 'update';
+      <div class="user-form-container">
+        <div>
+          <div><b>ID</b></div>
+          <div>
+            <%= $user->{id} %>
+          </div>
+        </div>
+        <div>
+          <div><b>Name</b></div>
+          <div>
+            <%= text_field 'name' => $user->{name}, placeholder => 'Name' %>
+          </div>
+        </div>
+        <div>
+          <div><b>Mail</b></div>
+          <div>
+            <%= text_field 'email' => $user->{email}, placeholder => 'Mail' %>
+          </div>
+        </div>
+	<div>
+          <div><b>Status</b></div>
+          <div>
+	    % my @status = ("Active", "Deactive", "Suspend");
+	    % my $index = 0;
+	    <select name="status">
+	      % for my $stats (@status) {
+		% my $sel = $user->{status} == $index?"selected=selected":"";
+		<option <%=  $sel %> value="<%= $index %>"><%= "$status[$index]" %></option>
+		% $index += 1;
+	      % }
+            </select>
+          </div>
+        </div>
+	<div>
+          <div><b>Storage Size</b></div>
+          <div>
+	    <% 
+		my @ssize = ("K", "M", "G", "T", "P", "E", "Z", "Y");
+		my $Csize = app->manager->convert_size($user->{maxsize}/1000, @ssize);
+	    %>
+	    <%= text_field 'size' => $Csize->{size}, placeholder => 'Size' %>
+	    <select name="unit">
+	    % for my $sz (@ssize) {
+	    % my $sel = $sz eq $Csize->{unit}?"selected=selected":"";
+	    <option <%=  $sel %> value="<%= $sz %>B"><%= $sz %></option>
+	    % }
+	    </select>
+          </div>
+        </div>
+        <div>
+          <div>
+            <button type="submit" class="btn btn-green" style="margin-top:20px">Update User</button>
+          </div>
+        </div>
+      </div>
+    </form>
+    <div style="text-align:center;margin:20px 0"><big><a href="<%= url_for('/_admin/users') %>">Users</a></big></div>
+  </div>
+  %= include '/include/footer';

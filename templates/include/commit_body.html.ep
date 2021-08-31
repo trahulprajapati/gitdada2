@@ -1,0 +1,128 @@
+<%
+  # Parameters
+  my $user_id = stash('user');
+  my $project_id = stash('project');
+  my $rep_info = stash('rep_info');
+  my $rev = stash('rev');
+  my $from_rev = stash('from_rev');
+
+  my $is_wiki = (stash('tab') // '') eq 'wiki';
+  my $user_project_path = "/$user_id/$project_id";
+  if ($is_wiki) {
+    $user_project_path .= '/wiki';
+  }
+  
+  unless ($rep_info) {
+    $rep_info = $is_wiki ? app->wiki_rep_info($user_id, $project_id) : app->rep_info($user_id, $project_id);
+  }
+  
+  my $param_ignore_space_change = param('w');
+  my $ignore_space_change;
+  if ($param_ignore_space_change) {
+    $ignore_space_change = 1;
+  }
+  else {
+    $ignore_space_change = app->dbi->model('project')->select(
+      'ignore_space_change',
+      where => {user_id => $user_id, name => $project_id}
+    )->value;
+  }
+  
+  # Git
+  my $git = app->git;
+  
+  # Diff tree
+  my $diff_trees = $git->diff_tree(
+    $rep_info,
+    $rev,
+    $from_rev,
+    {ignore_space_change => $ignore_space_change}
+  );
+
+  my $diff_trees_h = {};
+  for my $diff_tree (@$diff_trees) {
+    my $file = $diff_tree->{to_file};
+    $file = $diff_tree->{from_file} unless defined $file;
+    $diff_trees_h->{$file} = $diff_tree if defined $file;
+  }
+  
+  # Get blob diffs
+  my $blob_diffs = $git->blob_diffs(
+    $rep_info,
+    $from_rev,
+    $rev,
+    $diff_trees,
+    {ignore_space_change => $ignore_space_change}
+  ) || [];
+  
+  my $blob_diffs_h = {};
+  my $total_add_line_count = 0;
+  my $total_delete_line_count = 0;
+  for my $blob_diff (@$blob_diffs) {
+    my $file = $blob_diff->{file};
+    $blob_diffs_h->{$file} = $blob_diff;
+    $total_add_line_count += $blob_diff->{add_line_count};
+    $total_delete_line_count += $blob_diff->{delete_line_count};
+  }
+  
+  # diff_tree arguments
+  my %diff_tree_args = (
+    rev => $rev,
+    from_rev => $from_rev,
+    diff_trees => $diff_trees
+  );
+  
+%>
+
+%= javascript begin
+  $(document).ready(function () {
+  
+    // Diff Stats Button
+    var diff_tree_show = false;
+    var original_diff_stats_btn_text = $('#diff-stats-btn').text();
+    
+    $('#diff-stats-btn').on('click', function () {
+      if (diff_tree_show) {
+        $(this).text(original_diff_stats_btn_text);
+        $('#diff_tree').css('display', 'none');
+      }
+      else {
+        $('#diff_tree').css('display', 'block');
+      }
+      diff_tree_show = !diff_tree_show;
+    });
+  });
+% end
+
+<div class="commit-changes">
+  <div>
+    Showing <b><a id="diff-stats-btn" href="javascript:void;"><%= @$diff_trees %> changed files</a></b>
+    with
+    <b><%= $total_add_line_count %> additions</b>
+    and
+    <b><%= $total_delete_line_count %> deletions</b>
+  </div>
+</div>
+
+<div id="diff_tree" style="display:none">
+  %= include '/include/diff_tree', %diff_tree_args;
+</div>
+
+% my $num = 0;
+% for my $file (sort keys %$diff_trees_h) {
+  <%
+    # blob_diff_body arguments
+    my $blob_diff = $blob_diffs_h->{$file};
+    my %blob_diff_body_args = (
+      user => $user_id,
+      project => $project_id,
+      blob_diff => $blob_diff,
+      diff_tree => $diff_trees_h->{$file}
+    );
+  %>
+  <div id="diff-<%= $num %>">
+    %= include '/include/blob_diff_body', %blob_diff_body_args;
+  </div>
+  % $num++;
+% }
+</div>

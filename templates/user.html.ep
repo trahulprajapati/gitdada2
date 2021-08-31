@@ -1,0 +1,129 @@
+<%
+  # API
+  my $api = gitprep_api;
+  
+  # Redirect for project delete
+  if (my $deleted_project = param('deleted_project')) {
+    flash('deleted_project', $deleted_project);
+    $self->redirect_to('current');
+    return;
+  }
+  
+  my $user_id = param('user');
+  my $user = app->dbi->model('user')->select(
+    where => {id => $user_id, admin => 0}
+  )->one;
+  
+  # Projects
+  unless (app->manager->exists_user($user_id)) {
+    $self->reply->not_found;
+    return;
+  }
+  my $projects = app->manager->projects($user_id);
+  my $collab_proj = app->manager->collb_projects($user_id);
+  my $reps = [];
+  #project
+  for my $project (@$projects) {
+    my $rep = app->git->repository(app->rep_info($user_id, $project->{id})) || {none => 1};
+    $rep->{id} = $project->{id};
+    $rep->{private} = $project->{private};
+    $rep->{age} //= 0;
+    push @$reps, $rep;
+  }
+
+  #collabs
+  my $collab_reps = [];
+  #use Data::Dumper; die "----",Dumper $collab_proj;
+  for my $project (@$collab_proj) {
+    my $rep = app->git->repository(app->rep_info($user_id, $project->{id})) || {none => 1};
+    $rep->{id} = $project->{id};
+    $rep->{private} = $project->{private};
+    $rep->{age} //= 0;
+    $rep->{user_id} = $project->{user_id};
+    push @$collab_reps, $rep;
+  }
+%>
+
+% layout 'common', title => $user_id;
+  %= include '/include/header', title => 'Repositories';
+
+  <div class="container">
+    %= include '/include/message', message => flash('message');
+    
+    <div class="repositories-container">
+      <div class="repositories-left">
+        <div class="topic1">Own Repositories</div>
+        
+        <ul class="repositories">
+          % for my $rep (sort { $a->{age} <=> $b->{age} } @$reps) {
+            % if (!$rep->{private} || $api->can_access_private_project($user_id, $rep->{id})) {
+              <li>
+                % my $project_id = $rep->{id};
+                <div class="repositories-name">
+                  <a href="<%= url_for("/$user_id/$project_id") %>">
+                    <%= $rep->{id} %>
+                  </a>
+                  % if ($rep->{private}) {
+                    <i class="icon icon-lock"></i>
+                  % }
+                </div>
+                <div class="repositories-description">
+                  <%= $rep->{description} %>
+                </div>
+                <div class="repositories-age">
+                  % my $age = $rep->{age_string};
+                  % if ($rep->{none}) {
+                    <span style="color:red">Repository not exists</span>
+                    <a href="<%= "/$user_id/$rep->{id}/settings" %>" class="btn btn-mini">Settings</a>
+                  % } else {
+                    <%= $age ? "last updated $age" : 'new repository' %>
+                  % }
+                </div>
+              </li>
+            % }
+          % }
+        </ul>
+        <div class="topic1">Collaborator Repositories</div>
+        
+        <ul class="repositories">
+          % for my $rep (sort { $a->{age} <=> $b->{age} } @$collab_reps) {
+            % if (!$rep->{private} || $api->can_access_private_project($user_id, $rep->{id})) {
+              <li>
+                % my $project_id = $rep->{id};
+                % my $usr_id = $rep->{user_id};
+                <div class="repositories-name">
+                  <a href="<%= url_for("/$usr_id/$project_id") %>">
+                    <%= $rep->{id} %>
+                  </a>
+                  % if ($rep->{private}) {
+                    <i class="icon icon-lock"></i>
+                  % }
+                </div>
+                <div class="repositories-description">
+                  <%= $rep->{description} %>
+                </div>
+                <div class="repositories-age">
+                  % my $age = $rep->{age_string};
+                   <%= $age ? "last updated $age" : 'new repository' %>
+                </div>
+              </li>
+            % }
+          % }
+        </ul>
+      </div>
+      
+      <div class="repositories-right">
+        <h2 class="topic1">Profile</h2>
+        <div class="repositories-user-name">
+          % if (defined $user->{name} && length $user->{name}) {
+            <%= $user->{name} %>
+          % } else {
+            No Name
+          % }
+        </div>
+        <div class="repositories-user-id"><%= $user->{id} %></div>
+        <div class="repositories-user-mail"><i class="icon icon-envelope"></i> <a href="mailto:<%= $user->{email} %>"><%= $user->{email} %></a></div>
+      </div>
+    </div>
+  </div>
+  %= include '/include/footer';

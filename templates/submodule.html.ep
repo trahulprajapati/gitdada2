@@ -1,0 +1,71 @@
+<%
+  use File::Basename ();
+  
+  # API
+  my $api = gitprep_api;
+
+  # Git
+  my $git = $self->app->git;
+  
+  # Parameters
+  my $user = param('user');
+  my $project = param('project');
+  my $rev_file = param('rev_file');
+  my ($rev, $file) = $git->parse_rev_path(app->rep_info($user, $project), $rev_file);
+  my $file_base = File::Basename::basename $file;
+
+  # Blob lines
+  my $lines = $git->blob(app->rep_info($user, $project), $rev, '.gitmodules');
+  
+  my $submodule_rep_url;
+  my $match;
+  my $file_q = quotemeta $file;
+  for my $line (@$lines) {
+    $line =~ s/\r//;
+    $line =~ s/\n//;
+    
+    if ($match) {
+      if ($line =~ /url += +(.+)/) {
+        $submodule_rep_url = $1;
+        last;
+      }
+    }
+    elsif ($line =~ /path += +$file_q( +|$)/) {
+      $match = 1;
+    };
+  }
+
+  # Variables for included template
+  stash id => $rev;
+  stash project => $project;
+  stash rev => $rev;
+
+  layout 'common' , title => "$project/$file at $rev \x{30fb} $user/$project";
+%>
+
+  %= include '/include/header';
+
+  <div class="container">
+    %= include '/include/page_path', type => 'blob', Path => $file;
+    
+    <div class="submodule">
+      <div>
+        <div>
+          <div>
+            <%= $file_base %> <small>[submodule]</small>
+          </div>
+        </div>
+      </div>
+      <div class="last-child">
+        % if ($submodule_rep_url) {
+          % if ($submodule_rep_url =~ /^http/) {
+            <a href="<%= $submodule_rep_url %>"><%= $submodule_rep_url %></a>
+          % } else {
+            <%= $submodule_rep_url %>
+          % }
+        % }
+      </div>
+    </div>
+  </div>
+  
+  %= include '/include/footer';

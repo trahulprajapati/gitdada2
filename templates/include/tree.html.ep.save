@@ -1,0 +1,75 @@
+<%
+  my $dir = stash('dir');
+  my $commit_author_email = $commit->{author_email};
+  my $commit_author_id = app->dbi->model('user')->select(
+    'id',
+    where => {email => $commit_author_email}
+  )->value;
+%>
+
+<div>
+  <div class="commit-summary">
+    <div class="commit-summary-left-container">
+      <span class="commit-summary-author" title="<%= $commit->{author_email} %>">
+        % if (defined $commit_author_id) {
+          <a href="#"><%= $commit_author_id %></a>
+        % } else {
+          <%= $commit->{author_name} %>
+        % }
+      </span>
+      <a href="<%= url_for("/$user/$project/commit/$rev") %>">
+        <%= $commit->{title} %>
+      </a>
+    </div>
+    <div class="commit-summary-right-container">
+      Latest commit
+      <a href="#">
+        <%= substr($commit->{id}, 0, 7) %>
+      </a>
+      <%= $commit->{age_string} %>
+    </div>
+  </div>
+  <ul class="file-list">
+    % for (my $i = 0; $i <@$trees; $i++) {
+      <%
+        my $last = $i == @$trees - 1;
+        my $tree = $trees->[$i];
+        my $type = $tree->{type};
+        my $name = $tree->{name};
+        my $commit = $tree->{commit};
+        my $mode_str = $tree->{mode_str};
+      %>
+      
+      <li>
+        <div class="file-list-name">
+          % my $child_dir = defined $dir && length $dir ? join('/', $dir, $name) : $name;
+          % if ($mode_str eq 'm---------') {
+            <i class="icon-folder-close"></i>
+            <a href="             <%= $name %>
+            </a>
+            <small>[submodule]</small>              
+          % } elsif ($type eq 'blob') {
+            % my $file = defined $dir && $dir ne '' ? "$dir/$name" : $name;
+            <i class="icon-file"></i>
+            <a href="<%= url_for("/$user/$project/blob/$rev/$file") %>">
+              <%= $name %>
+            </a>
+          % } elsif ($tree) {
+            <i class="icon-folder-close"></i>
+            <a href="<%= url_for("/$user/$project/tree/$rev/$child_dir") %>">
+              <%= $name %>
+            </a>
+          % }
+        </div>
+        <div class="file-list-commit">
+          <a href="<%= url_for("/$user/$project/commit/$commit->{id}") %>">
+            <%= $commit->{title_short} %>
+          </a>
+        </div>
+        <div class="file-list-age">
+          <span title="<%= $commit->{age_string_datetime_local} %>"><%= $commit->{age_string} %></span>
+        </div>
+      </li>
+    % }
+  </ul>
+</div>
